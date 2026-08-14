@@ -1,0 +1,33 @@
+feature_id: "0001"
+feature_name: harness-eval
+version: 1
+
+criteria:
+  - id: CLI_EXITS
+    description: bench CLI accepts --kernel and --reference paths
+    check:
+      type: cli_help
+      command: ["python", "harness/bench.py", "--help"]
+      expect_exit: 0
+
+  - id: RESULT_SCHEMA
+    description: dry-run emits JSON validating against harness_result schema
+    check:
+      type: json_schema
+      schema: specs/schemas/harness_result.schema.json
+      fixture: tests/fixtures/harness_result_minimal.json
+
+  - id: SPEEDUP_FIELD
+    description: result includes speedup_vs_eager when benchmark succeeds
+    check:
+      type: field_present
+      path: benchmark.speedup_vs_eager
+      fixture: tests/fixtures/harness_result_success.json
+
+  - id: FAIL_CLOSED
+    description: correctness failure sets passed=false and skips speedup claim
+    check:
+      type: field_equals
+      path: passed
+      value: false
+      fixture: tests/fixtures/harness_result_failed.json

@@ -1,0 +1,24 @@
+{
+  "version": "1",
+  "passed": true,
+  "correctness": {
+    "passed": true,
+    "stages": [
+      { "name": "smoke", "passed": true, "message": "skeleton" },
+      { "name": "shape_sweep", "passed": true, "message": "skeleton" },
+      { "name": "numerical_stress", "passed": true, "message": "skeleton" },
+      { "name": "determinism", "passed": true, "message": "skeleton" },
+      { "name": "edge_cases", "passed": true, "message": "skeleton" }
+    ]
+  },
+  "benchmark": {
+    "ran": true,
+    "speedup_vs_eager": 1.0,
+    "kernel_ms": 1.0,
+    "baseline_ms": 1.0
+  },
+  "meta": {
+    "kernel_path": "k",
+    "reference_path": "r"
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "version": "1",
+  "passed": true,
+  "correctness": {
+    "passed": true,
+    "stages": [{ "name": "smoke", "passed": true, "message": "" }]
+  },
+  "benchmark": {
+    "ran": true,
+    "speedup_vs_eager": 1.25,
+    "kernel_ms": 0.8,
+    "baseline_ms": 1.0
+  },
+  "meta": {
+    "kernel_path": "kernels/triton/candidate.py",
+    "reference_path": "kernels/triton/reference_relu.py",
+    "run_id": "test-run",
+    "candidate_id": "abc123"
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/suv11235/autokernel-PBT/schemas/benchmark_config.schema.json",
+  "title": "BenchmarkConfig",
+  "type": "object",
+  "required": ["correctness", "benchmark"],
+  "properties": {
+    "correctness": {
+      "type": "object",
+      "properties": {
+        "stages": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "rtol": { "type": "number" },
+        "atol": { "type": "number" }
+      }
+    },
+    "benchmark": {
+      "type": "object",
+      "properties": {
+        "warmup": { "type": "integer", "minimum": 0 },
+        "repeats": { "type": "integer", "minimum": 1 }
+      }
+    }
+  }
+}

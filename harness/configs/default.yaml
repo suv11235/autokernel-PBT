@@ -1,0 +1,15 @@
+# Default harness configuration (spec 0002)
+
+correctness:
+  stages:
+    - smoke
+    - shape_sweep
+    - numerical_stress
+    - determinism
+    - edge_cases
+  rtol: 1.0e-3
+  atol: 1.0e-3
+
+benchmark:
+  warmup: 10
+  repeats: 100

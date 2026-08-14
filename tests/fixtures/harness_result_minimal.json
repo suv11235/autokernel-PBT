@@ -1,0 +1,13 @@
+{
+  "version": "1",
+  "passed": true,
+  "correctness": {
+    "passed": true,
+    "stages": [{ "name": "smoke", "passed": true, "message": "" }]
+  },
+  "benchmark": { "ran": false },
+  "meta": {
+    "kernel_path": "k",
+    "reference_path": "r"
+  }
+}

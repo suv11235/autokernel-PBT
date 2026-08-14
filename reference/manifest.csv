@@ -1,0 +1,58 @@
+level,sublevel,filename,arxiv_id,title
+L0,,2601.15727.pdf,2601.15727,Survey: Automated Kernel Generation in the Era of LLMs
+L1,compiler-autotuning,halide-pldi2013.pdf,,Halide (PLDI 2013)
+L1,compiler-autotuning,1802.04799.pdf,1802.04799,TVM
+L1,compiler-autotuning,1805.08166.pdf,1805.08166,AutoTVM
+L1,compiler-autotuning,2006.06762.pdf,2006.06762,Ansor
+L1,compiler-autotuning,2205.13603.pdf,2205.13603,Meta Schedule
+L1,compiler-autotuning,2405.05751.pdf,2405.05751,Mirage
+L1,compiler-autotuning,alphatensor-nature2022.pdf,,AlphaTensor (Nature 2022)
+L1,dsls,triton-mapl2019.pdf,,Triton (MAPL 2019)
+L1,dsls,2504.17577.pdf,2504.17577,TileLang
+L1,llm-kernels,2205.14135.pdf,2205.14135,FlashAttention
+L1,llm-kernels,2307.08691.pdf,2307.08691,FlashAttention-2
+L1,llm-kernels,2407.08608.pdf,2407.08608,FlashAttention-3
+L1,llm-kernels,2501.01005.pdf,2501.01005,FlashInfer
+L1,llm-kernels,2309.06180.pdf,2309.06180,PagedAttention (vLLM)
+L1,llm-kernels,2512.22219.pdf,2512.22219,MPK
+L2,,2401.12554.pdf,2401.12554,ParEval
+L2,,2502.10517.pdf,2502.10517,KernelBench
+L2,,2502.14752.pdf,2502.14752,TritonBench
+L2,,2507.17773.pdf,2507.17773,MultiKernelBench
+L2,,2601.00227.pdf,2601.00227,FlashInfer-Bench
+L2,,2603.19173.pdf,2603.19173,SOL-ExecBench
+L2,,2509.14279.pdf,2509.14279,Robust Agentic CUDA Benchmarking
+L3,,2510.07356.pdf,2510.07356,ConCuR / KernelCoder
+L3,,2603.16790.pdf,2603.16790,InCoder-32B
+L3,,2507.11948.pdf,2507.11948,Kevin
+L3,,2507.05687.pdf,2507.05687,AutoTriton
+L3,,2510.17891.pdf,2510.17891,TritonRL
+L3,,2511.20100.pdf,2511.20100,QiMeng-Kernel
+L3,,2512.02551.pdf,2512.02551,CUDA-L2
+L3,,2602.05885.pdf,2602.05885,Dr. Kernel
+L3,,2602.24286.pdf,2602.24286,CUDA Agent
+L3,,2601.07160.pdf,2601.07160,AscendKernelGen
+L3,,2505.06302.pdf,2505.06302,QiMeng-TensorOp
+L3,,2603.28342.pdf,2603.28342,Kernel-Smith (also in L4)
+L4,iterative-agents,2506.09092.pdf,2506.09092,CUDA-LLM
+L4,iterative-agents,2512.09196.pdf,2512.09196,TritonForge
+L4,iterative-agents,2603.21331.pdf,2603.21331,AutoKernel
+L4,iterative-agents,2509.07506.pdf,2509.07506,Astra
+L4,iterative-agents,2511.06345.pdf,2511.06345,PRAGMA
+L4,iterative-agents,2511.18868.pdf,2511.18868,KernelBand
+L4,iterative-agents,2601.05475.pdf,2601.05475,MaxCode
+L4,iterative-agents,2602.19128.pdf,2602.19128,K-Search
+L4,evolutionary-pbt,1711.09846.pdf,1711.09846,Population Based Training
+L4,evolutionary-pbt,2510.03760.pdf,2510.03760,EvoEngineer
+L4,evolutionary-pbt,2512.16465.pdf,2512.16465,cuPilot
+L4,evolutionary-pbt,2510.26144.pdf,2510.26144,FM Agent
+L4,evolutionary-pbt,2603.28342.pdf,2603.28342,Kernel-Smith
+L5,multi-agent,2510.16996.pdf,2510.16996,STARK
+L5,multi-agent,2511.01884.pdf,2511.01884,CudaForge
+L5,multi-agent,2512.23424.pdf,2512.23424,AKG Kernel Agent
+L5,multi-agent,2507.23194.pdf,2507.23194,GEAK
+L5,multi-agent,2603.10085.pdf,2603.10085,KernelSkill
+L5,multi-agent,2512.23236.pdf,2512.23236,KernelEvolve
+L5,memory-and-retrieval,2510.19873.pdf,2510.19873,ReGraphT
+L5,memory-and-retrieval,2602.14293.pdf,2602.14293,KernelBlaster
+L5,memory-and-retrieval,2603.10846.pdf,2603.10846,EvoKernel

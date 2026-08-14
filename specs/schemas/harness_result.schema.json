@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/suv11235/autokernel-PBT/schemas/harness_result.schema.json",
+  "title": "HarnessResult",
+  "type": "object",
+  "required": ["version", "passed", "correctness", "benchmark", "meta"],
+  "properties": {
+    "version": { "type": "string", "const": "1" },
+    "passed": { "type": "boolean" },
+    "correctness": {
+      "type": "object",
+      "required": ["passed", "stages"],
+      "properties": {
+        "passed": { "type": "boolean" },
+        "stages": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "passed"],
+            "properties": {
+              "name": { "type": "string" },
+              "passed": { "type": "boolean" },
+              "message": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "benchmark": {
+      "type": "object",
+      "required": ["ran"],
+      "properties": {
+        "ran": { "type": "boolean" },
+        "speedup_vs_eager": { "type": "number" },
+        "kernel_ms": { "type": "number" },
+        "baseline_ms": { "type": "number" }
+      }
+    },
+    "meta": {
+      "type": "object",
+      "required": ["kernel_path", "reference_path"],
+      "properties": {
+        "kernel_path": { "type": "string" },
+        "reference_path": { "type": "string" },
+        "run_id": { "type": "string" },
+        "candidate_id": { "type": "string" }
+      }
+    }
+  }
+}

@@ -1,0 +1,25 @@
+feature_id: "0002"
+feature_name: correctness-harness
+version: 1
+
+criteria:
+  - id: STAGE_ORDER
+    description: default config lists five named stages in order
+    check:
+      type: config_equals
+      path: harness/configs/default.yaml
+      key: correctness.stages
+      value: [smoke, shape_sweep, numerical_stress, determinism, edge_cases]
+
+  - id: GATE_BENCHMARK
+    description: benchmark stage skipped when any prior stage fails
+    check:
+      type: unit_test
+      test: tests/unit/test_correctness_gate.py::test_benchmark_skipped_on_failure
+
+  - id: STAGE_RECORDS
+    description: each stage produces name and passed fields
+    check:
+      type: json_schema
+      schema: specs/schemas/harness_result.schema.json
+      fixture: tests/fixtures/harness_result_stages.json

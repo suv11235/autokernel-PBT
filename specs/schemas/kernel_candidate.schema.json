@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/suv11235/autokernel-PBT/schemas/kernel_candidate.schema.json",
+  "title": "KernelCandidate",
+  "type": "object",
+  "required": ["id", "source_path", "backend", "generation"],
+  "properties": {
+    "id": { "type": "string" },
+    "source_path": { "type": "string" },
+    "backend": { "type": "string", "enum": ["triton", "cuda", "torch"] },
+    "generation": { "type": "integer", "minimum": 0 },
+    "parent_id": { "type": ["string", "null"] },
+    "lineage_id": { "type": "string" },
+    "fitness": { "type": "number" },
+    "harness_result_path": { "type": "string" }
+  }
+}

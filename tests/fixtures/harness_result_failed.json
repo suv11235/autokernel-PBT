@@ -1,0 +1,15 @@
+{
+  "version": "1",
+  "passed": false,
+  "correctness": {
+    "passed": false,
+    "stages": [
+      { "name": "smoke", "passed": false, "message": "shape mismatch" }
+    ]
+  },
+  "benchmark": { "ran": false },
+  "meta": {
+    "kernel_path": "kernels/triton/candidate.py",
+    "reference_path": "kernels/triton/reference_relu.py"
+  }
+}
