@@ -38,6 +38,10 @@ pytest -m gpu             # requires CUDA + torch
 python harness/bench.py --help
 ```
 
+## Agent commits
+
+Cursor agents must **not** use plain `git commit` (adds `Co-authored-by: Cursor` to history). Use the project skill [`.cursor/skills/clean-git-commits/`](./.cursor/skills/clean-git-commits/SKILL.md) or `scripts/git_commit_clean.sh` after staging.
+
 ## Reference library
 
 Local PDFs live under `reference/L0-start-here/` … `L5-advanced-topics/`. PDFs are gitignored (~160 MB); clone then refresh via `reference/manifest.csv` if needed.
