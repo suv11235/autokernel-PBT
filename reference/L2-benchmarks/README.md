@@ -20,7 +20,7 @@ Most LLM kernel benchmarks report:
 | 4 | MultiKernelBench | [papers/2507.17773.pdf](./papers/2507.17773.pdf) | Multi-platform (GPU/NPU/TPU) |
 | 5 | FlashInfer-Bench | [papers/2601.00227.pdf](./papers/2601.00227.pdf) | Production inference kernels |
 | 6 | SOL-ExecBench | [papers/2603.19173.pdf](./papers/2603.19173.pdf) | Speed-of-light hardware limits |
-| 7 | Robust agentic CUDA bench | [papers/2509.14279.pdf](./papers/2509.14279.pdf) | Robustness + evolutionary baselines |
+| 7 | Robust agentic CUDA bench | [papers/2509.14279.pdf](./papers/2509.14279.pdf) | Robustness + baseline comparisons |
 
 ## Next
 

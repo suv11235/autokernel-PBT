@@ -1,6 +1,6 @@
 # Harness
 
-Fixed evaluation entrypoint for agent and PBT loops.
+Fixed evaluation entrypoint for agent and test loops.
 
 ## Usage
 

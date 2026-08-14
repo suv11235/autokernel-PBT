@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fixed harness entrypoint for agent/PBT loops (spec 0001).
+"""Fixed harness entrypoint for agent/test loops (spec 0001).
 
 Usage:
   python harness/bench.py --kernel kernels/triton/candidate.py \\

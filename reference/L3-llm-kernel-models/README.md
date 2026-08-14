@@ -27,7 +27,7 @@
 
 | Paper | File |
 |-------|------|
-| Kernel-Smith | [papers/2603.28342.pdf](./papers/2603.28342.pdf) *(also in [L4/evolutionary-pbt](../L4-agentic-search/evolutionary-pbt/))* |
+| Kernel-Smith | [papers/2603.28342.pdf](./papers/2603.28342.pdf) |
 
 ## Next
 

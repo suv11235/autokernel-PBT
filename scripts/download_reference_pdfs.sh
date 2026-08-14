@@ -21,7 +21,6 @@ while IFS=, read -r level sublevel filename arxiv_id title; do
     L4)
       case "$sublevel" in
         iterative-agents) dir="$dir/L4-agentic-search/iterative-agents" ;;
-        evolutionary-pbt) dir="$dir/L4-agentic-search/evolutionary-pbt" ;;
       esac
       ;;
     L5)

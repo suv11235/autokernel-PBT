@@ -14,7 +14,7 @@
 - **Manual** expert kernels (FlashAttention, CUTLASS) set the performance bar.
 - **Compiler autotuning** (TVM/Ansor) searches schedules without writing CUDA by hand.
 - **LLM generation** writes kernels from PyTorch specs; still hard to beat `torch.compile`.
-- **Agent + evolution** iterates with compile/run/profile feedback — the line autokernel-PBT extends.
+- **Agent loops** iterate with compile/run/profile feedback — the line autokernel-PBT extends.
 
 ## Next
 

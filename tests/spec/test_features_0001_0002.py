@@ -1,4 +1,4 @@
-"""Spec-derived acceptance tests (features 0001–0003)."""
+"""Spec-derived acceptance tests (features 0001–0002)."""
 
 import json
 import subprocess

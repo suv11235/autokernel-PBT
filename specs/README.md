@@ -16,7 +16,6 @@ Every feature starts as a **spec** before code. Tests are written from **accepta
 |----|---------|--------|
 | [0001](./features/0001-harness-eval/spec.md) | Harness evaluation pipeline | skeleton |
 | [0002](./features/0002-correctness-harness/spec.md) | Multi-stage correctness | skeleton |
-| [0003](./features/0003-pbt-search/spec.md) | Population-based kernel search | skeleton |
 
 ## Schemas
 

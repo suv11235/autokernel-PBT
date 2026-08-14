@@ -6,7 +6,7 @@ Accepted
 
 ## Context
 
-autokernel-PBT combines agent-style kernel search with population-based exploration. Requirements evolve quickly; we need traceability from spec → test → harness behavior.
+autokernel-PBT combines agent-style kernel development with property-based validation. Requirements evolve quickly; we need traceability from spec → test → harness behavior.
 
 ## Decision
 

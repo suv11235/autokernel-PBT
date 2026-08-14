@@ -1,8 +1,13 @@
 # autokernel-PBT
 
-Population-based training (PBT) for automated GPU kernel search — spec-driven and test-driven from day one.
+**Property-based testing (PBT) for automated kernel development** — spec-driven and test-driven from day one.
 
-Extends the [AutoKernel](https://arxiv.org/abs/2603.21331) agent loop with **populations** of kernel candidates (exploit best, explore mutations) instead of single-trajectory refinement.
+Kernel correctness is checked by generating inputs and evaluating **properties** — algebraic laws, metamorphic relations, and reference comparisons — rather than by a fixed set of hand-written cases. The scope is framework-agnostic: CUDA and Triton today, AWS Trainium (NKI) and other accelerator stacks by design.
+
+Two workstreams share the property layer:
+
+- **New kernel development** — generate and validate kernels against portable properties.
+- **Kernel translation** — port a kernel between backends, using shared properties as the equivalence contract.
 
 ## Development model
 
@@ -21,7 +26,7 @@ See [specs/README.md](./specs/README.md) for the full workflow.
 | Path | Purpose |
 |------|---------|
 | `specs/` | Feature specs, schemas, architecture notes |
-| `contracts/` | Stable interfaces between harness ↔ PBT ↔ kernels |
+| `contracts/` | Stable interfaces between harness ↔ kernels |
 | `src/autokernel_pbt/` | Library code |
 | `harness/` | Correctness + benchmark harness (agent-evaluable) |
 | `kernels/` | Candidate kernel implementations (Triton / CUDA) |
@@ -44,7 +49,7 @@ Cursor agents must **not** use plain `git commit` (adds `Co-authored-by: Cursor`
 
 ## Reference library
 
-Local PDFs live under `reference/L0-start-here/` … `L5-advanced-topics/`. PDFs are gitignored (~160 MB); clone then refresh via `reference/manifest.csv` if needed.
+Local PDFs live under `reference/L0-start-here/` … `L5-advanced-topics/`. PDFs are gitignored; clone then refresh via `reference/manifest.csv` if needed.
 
 ## License
 

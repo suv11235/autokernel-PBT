@@ -2,7 +2,7 @@
 
 ## Problem
 
-Agent and PBT loops need a **single fixed entrypoint** that returns structured, schema-valid results — analogous to AutoKernel's `bench.py`.
+Agent and test loops need a **single fixed entrypoint** that returns structured, schema-valid results — analogous to AutoKernel's `bench.py`.
 
 ## Scope
 

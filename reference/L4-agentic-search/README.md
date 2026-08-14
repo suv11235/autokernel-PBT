@@ -2,9 +2,7 @@
 
 **Goal:** Systems that **iterate** — generate, compile, test, profile, keep/revert — rather than one-shot codegen. This is the direct context for **autokernel-PBT**.
 
-Read in order: **iterative agents → evolutionary / PBT**.
-
-## 4a — Iterative agent loops
+## Iterative agent loops
 
 | Paper | File | Highlight |
 |-------|------|-----------|
@@ -16,16 +14,6 @@ Read in order: **iterative agents → evolutionary / PBT**.
 | KernelBand | [iterative-agents/2511.18868.pdf](./iterative-agents/2511.18868.pdf) | Bandit over optimization strategies |
 | MaxCode | [iterative-agents/2601.05475.pdf](./iterative-agents/2601.05475.pdf) | Max-reward RL unification |
 | K-Search | [iterative-agents/2602.19128.pdf](./iterative-agents/2602.19128.pdf) | LLM world model guides search |
-
-## 4b — Evolutionary & population-based search
-
-| Paper | File | Highlight |
-|-------|------|-----------|
-| **Population Based Training** | [evolutionary-pbt/1711.09846.pdf](./evolutionary-pbt/1711.09846.pdf) | **PBT theory** — exploit/explore populations |
-| EvoEngineer | [evolutionary-pbt/2510.03760.pdf](./evolutionary-pbt/2510.03760.pdf) | Formalizes traverse × population management |
-| **cuPilot** | [evolutionary-pbt/2512.16465.pdf](./evolutionary-pbt/2512.16465.pdf) | Strategy-level crossover + roofline prompts |
-| FM Agent | [evolutionary-pbt/2510.26144.pdf](./evolutionary-pbt/2510.26144.pdf) | Multi-population evolution |
-| Kernel-Smith | [evolutionary-pbt/2603.28342.pdf](./evolutionary-pbt/2603.28342.pdf) | Population archive + RL from trajectories |
 
 ## Next
 

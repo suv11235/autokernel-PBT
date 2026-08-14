@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "autokernel-pbt"
 version = "0.1.0"
-description = "Population-based search for automated GPU kernel optimization"
+description = "Property-based testing for automated kernel development and translation"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
