@@ -1,0 +1,46 @@
+feature_id: "0004"
+feature_name: property-oracle-layer
+version: 1
+
+criteria:
+  - id: DETERMINISTIC_GENERATION
+    description: the same seed reproduces byte-identical inputs
+    check:
+      type: unit_test
+      test: tests/unit/props/test_generator.py::test_same_seed_gives_identical_tensors
+
+  - id: CASE_GROUPS
+    description: related cases share a group id and are retrievable by relation
+    check:
+      type: unit_test
+      test: tests/unit/props/test_case.py::test_group_finds_case_by_relation
+
+  - id: TABLE_ROUND_TRIP
+    description: recorded tensors survive persistence bitwise
+    check:
+      type: unit_test
+      test: tests/unit/props/test_table.py::test_round_trip_preserves_tensors_bitwise
+
+  - id: THREE_VALUED_VERDICT
+    description: an empty property set is inconclusive, never a pass
+    check:
+      type: unit_test
+      test: tests/unit/props/test_verdict.py::test_empty_results_are_inconclusive_not_pass
+
+  - id: DIMENSIONLESS_TOLERANCE
+    description: the reference arm uses a scale-invariant test ratio, not allclose
+    check:
+      type: unit_test
+      test: tests/unit/props/test_tolerance.py::test_ratio_is_dimensionless_across_scale
+
+  - id: PROPERTY_ATTRIBUTION
+    description: each verdict records the property name and its tolerance-free flag
+    check:
+      type: unit_test
+      test: tests/unit/props/test_oracle.py::test_declarative_oracle_records_tolerance_free_flag
+
+  - id: REPLAY_FAIRNESS
+    description: oracle arms score identical recorded executions
+    check:
+      type: unit_test
+      test: tests/integration/test_record_replay.py::test_both_arms_see_byte_identical_inputs
