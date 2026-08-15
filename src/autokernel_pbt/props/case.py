@@ -12,7 +12,11 @@ BASE_RELATION = "base"
 
 @dataclass(frozen=True)
 class Case:
-    """One executable input set."""
+    """One executable input set.
+
+    Tensors are shared by reference across `replace()`; relations must rebind
+    entries, never mutate in place.
+    """
 
     case_id: str
     group_id: str
@@ -20,12 +24,13 @@ class Case:
     task_id: str
     dtype: str
     shape: tuple[int, ...]
+    # compare=False: identity is case_id; ndarray __eq__ is elementwise and
+    # would break __eq__/__hash__.
     tensors: dict[str, np.ndarray] = field(compare=False)
 
     def __post_init__(self) -> None:
-        # Normalize shape to tuple of int
-        if not isinstance(self.shape, tuple):
-            object.__setattr__(self, "shape", tuple(int(s) for s in self.shape))
+        # Normalize shape to tuple of int unconditionally
+        object.__setattr__(self, "shape", tuple(int(s) for s in self.shape))
 
     def metadata(self) -> dict[str, Any]:
         """Everything except tensor payloads — this is what lands in Parquet."""
@@ -47,9 +52,8 @@ class CaseGroup:
     cases: tuple[Case, ...]
 
     def __post_init__(self) -> None:
-        # Normalize cases to tuple
-        if not isinstance(self.cases, tuple):
-            object.__setattr__(self, "cases", tuple(self.cases))
+        # Normalize cases to tuple unconditionally
+        object.__setattr__(self, "cases", tuple(self.cases))
 
         bases = [c for c in self.cases if c.relation == BASE_RELATION]
         if len(bases) != 1:
@@ -65,6 +69,18 @@ class CaseGroup:
                     f"{case.group_id!r}, group is {self.group_id!r}"
                 )
                 raise ValueError(msg)
+
+        # Validate uniqueness of relations and case_ids
+        relations = [c.relation for c in self.cases]
+        if len(set(relations)) != len(relations):
+            raise ValueError(
+                f"group {self.group_id} has duplicate relations: {relations}"
+            )
+        ids = [c.case_id for c in self.cases]
+        if len(set(ids)) != len(ids):
+            raise ValueError(
+                f"group {self.group_id} has duplicate case_ids: {ids}"
+            )
 
     @property
     def base(self) -> Case:
