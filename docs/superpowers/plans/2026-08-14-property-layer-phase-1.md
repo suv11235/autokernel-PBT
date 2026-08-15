@@ -376,7 +376,11 @@ SUPPORTED_DISTRIBUTIONS = ("normal", "uniform", "zeros", "ones")
 
 @dataclass(frozen=True)
 class TensorSpec:
-    """One input tensor's value distribution. Shape comes from the domain."""
+    """One input tensor's value distribution. Shape comes from the domain.
+
+    ``low``/``high`` apply only to the ``uniform`` distribution; they are inert for
+    ``normal``, ``zeros`` and ``ones``.
+    """
 
     name: str
     dtype: str
@@ -386,9 +390,15 @@ class TensorSpec:
 
     def __post_init__(self) -> None:
         if self.dtype not in SUPPORTED_DTYPES:
-            raise ValueError(f"unsupported dtype {self.dtype!r}; expected one of {SUPPORTED_DTYPES}")
+            raise ValueError(
+                f"unsupported dtype {self.dtype!r}; expected one of {SUPPORTED_DTYPES}"
+            )
         if self.distribution not in SUPPORTED_DISTRIBUTIONS:
             raise ValueError(f"unsupported distribution {self.distribution!r}")
+        # Caught here rather than deep inside rng.uniform, where the tensor name is lost.
+        # low == high is a legitimate constant-fill request.
+        if self.high < self.low:
+            raise ValueError(f"tensor {self.name!r}: low {self.low} exceeds high {self.high}")
 
     def numpy_dtype(self) -> np.dtype:
         return np.dtype(self.dtype)
@@ -414,9 +424,18 @@ class InputDomain:
     task_id: str
     tensors: tuple[TensorSpec, ...]
     shapes: tuple[tuple[int, ...], ...]
-    relations: tuple[str, ...] = field(default=())
+    relations: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
+        # Normalize before the guards. Without this, a domain built by hand with lists
+        # compares unequal to the same domain rebuilt by from_dict, and np.int64 dims
+        # make to_dict output non-JSON-serializable at persist time. tuple(()) == tuple([])
+        # so the emptiness guards below still fire correctly.
+        object.__setattr__(self, "tensors", tuple(self.tensors))
+        object.__setattr__(
+            self, "shapes", tuple(tuple(int(d) for d in s) for s in self.shapes)
+        )
+        object.__setattr__(self, "relations", tuple(self.relations))
         if not self.shapes:
             raise ValueError("domain needs at least one shape")
         if not self.tensors:
