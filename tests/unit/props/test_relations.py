@@ -1,5 +1,7 @@
 """Relation tests."""
 
+from dataclasses import replace
+
 import numpy as np
 import pytest
 
@@ -25,6 +27,9 @@ def test_shift_rows_adds_per_row_constant():
     diff = derived.tensors["x"] - _base().tensors["x"]
     # Every element in a row shifted by the same amount.
     assert np.allclose(diff, diff[:, :1])
+    # ...and the rows are shifted by *different* amounts. Without this, a
+    # scalar shift (size=(1, 1) or size=()) also passes.
+    assert diff[0, 0] != diff[1, 0]
 
 
 def test_shift_rows_sets_relation_and_group():
@@ -52,10 +57,9 @@ def test_relations_registry_is_keyed_by_name():
         assert factory().name == name
 
 
-def test_relations_are_deterministic_for_a_seed():
-    a = ShiftRows().derive(_base(), np.random.default_rng(7))
-    b = ShiftRows().derive(_base(), np.random.default_rng(7))
-    assert np.array_equal(a.tensors["x"], b.tensors["x"])
+# (Seed determinism is covered by
+# test_sequential_relations_share_an_rng_deterministically, which pins the same
+# base and seed with stricter assertions.)
 
 
 # --- A. non-mutation of the base case -------------------------------------
@@ -130,3 +134,62 @@ def test_sequential_relations_share_an_rng_deterministically():
     assert np.array_equal(a_shift, b_shift)
     assert np.array_equal(a_perm_x, b_perm_x)
     assert np.array_equal(a_perm, b_perm)
+
+
+# --- anti-vacuity: the shift must be big enough to expose the defect --------
+
+
+def _softmax_naive(x: np.ndarray) -> np.ndarray:
+    """The defect under test: no max-subtraction, so exp() can overflow."""
+    e = np.exp(x)
+    return e / e.sum(axis=-1, keepdims=True)
+
+
+def _softmax_correct(x: np.ndarray) -> np.ndarray:
+    e = np.exp(x - x.max(axis=-1, keepdims=True))
+    return e / e.sum(axis=-1, keepdims=True)
+
+
+def _sweep(kernel, groups: int = 50, seed: int = 3) -> int:
+    """Count groups where the kernel's shifted output diverges from its base."""
+    rng = np.random.default_rng(seed)
+    diverged = 0
+    for i in range(groups):
+        base = replace(
+            _base(),
+            case_id=f"c{i}",
+            tensors={"x": rng.normal(0.0, 1.0, size=(4, 8)).astype(np.float32)},
+        )
+        partner = ShiftRows().derive(base, rng)
+        with np.errstate(over="ignore", invalid="ignore"):
+            out_base = kernel(base.tensors["x"])
+            out_partner = kernel(partner.tensors["x"])
+        if not np.allclose(out_base, out_partner, atol=1e-5, equal_nan=False):
+            diverged += 1
+    return diverged
+
+
+def test_shift_scale_can_actually_catch_an_unstable_softmax():
+    # If this fails, the relation has gone vacuous: the shift is no longer
+    # large enough to push exp() past the float32 overflow point (~88.72).
+    assert _sweep(_softmax_naive) > 0
+
+
+def test_shift_scale_does_not_false_alarm_on_a_correct_softmax():
+    assert _sweep(_softmax_correct) == 0
+
+
+def test_default_shift_scale_tracks_the_dtype_overflow_point():
+    # Probe with many rows: a 2-row sample says little about the scale.
+    wide = replace(_base(), tensors={"x": np.zeros((4000, 4), dtype=np.float32)})
+    shifts = ShiftRows().derive(wide, np.random.default_rng(0)).tensors["x"][:, 0]
+
+    overflow = float(np.log(np.finfo(np.float32).max))  # ~88.72
+    # The shift must land in the band that actually reaches overflow. A
+    # unit-scale shift sits at 0.011x of this and makes the property vacuous.
+    assert 0.25 * overflow < shifts.std() < 0.75 * overflow
+
+
+def test_shift_scale_is_overridable():
+    derived = ShiftRows(scale=0.0).derive(_base(), np.random.default_rng(0))
+    assert np.array_equal(derived.tensors["x"], _base().tensors["x"])
