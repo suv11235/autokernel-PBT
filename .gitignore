@@ -36,3 +36,6 @@ reference/**/*.pdf
 # Secrets
 .env
 .env.*
+
+# Agent worktrees
+.claude/worktrees/
