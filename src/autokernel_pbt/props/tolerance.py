@@ -161,8 +161,13 @@ def residual_ratio(
     # for nothing at all: linear n is the worst case for *sequential* accumulation,
     # where every rounding error is assumed to align, and sqrt(n) is a folk-statistical
     # guess. Both over-normalize badly here. Measured drift of the correct-kernel ratio
-    # across n = 8 .. 16384 (float32 softmax against a float64 recompute, median of 60
-    # trials), where a good normalization is flat: log2 3.7x, sqrt 35x, linear n 1600x.
+    # across n = 8 .. 16384 (float32 softmax against a float64 recompute *of the same
+    # float32 input*, median of 60 trials), where a good normalization is flat: log2
+    # 3.7x, sqrt 35x, linear n 1600x. Which reference the recompute starts from is not
+    # incidental — recomputing from the original float64 draws instead adds an
+    # input-quantization term that grows with n, which measures a different question and
+    # flips which normalization looks flattest. Across 24 swept variants of that choice
+    # log2 drifts 1.9x-6.2x and sqrt 18x-60x, so log2 is the safe pick under all of them.
     # Over-normalizing is not a harmless safety margin — it raises the detection floor
     # in step with n, and under linear n a softmax whose denominator was 0.3% wrong
     # scored 6.1 at n=4096 and passed, a bug the field-default allclose catches. A

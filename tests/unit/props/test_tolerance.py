@@ -77,6 +77,12 @@ def test_ratio_normalizes_by_log2_of_the_accumulation_length():
     actually compute; the alternatives are the bound for sequential accumulation
     (n), a folk-statistical guess (sqrt), and no normalization at all. All four
     are pinned apart, so a silent change to any of them fails here.
+
+    If you mutation-test this, run with PYTHONDONTWRITEBYTECODE=1. The divisor's
+    `max(float(np.log2(length)), 1.0)` and the sqrt mutant that replaces it are the
+    same byte length, so an in-place harness leaves the file size unchanged and can
+    take a stale __pycache__ hit — reporting the sqrt mutant as surviving when it is
+    the old bytecode that ran.
     """
     # Exactly representable in float32, so the residual is exactly delta and the
     # absolute assertion below can be tight rather than approximate.
