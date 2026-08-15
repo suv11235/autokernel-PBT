@@ -565,7 +565,12 @@ BASE_RELATION = "base"
 
 @dataclass(frozen=True)
 class Case:
-    """One executable input set."""
+    """One executable input set.
+
+    Tensors are shared by reference across ``replace()``; relations must rebind
+    entries, never mutate in place, or a partner will corrupt the base case that
+    the property compares against.
+    """
 
     case_id: str
     group_id: str
@@ -573,7 +578,15 @@ class Case:
     task_id: str
     dtype: str
     shape: tuple[int, ...]
+    # compare=False: identity is case_id; ndarray __eq__ is elementwise and would
+    # break __eq__/__hash__. It also excludes tensors from the generated __hash__.
     tensors: dict[str, np.ndarray] = field(compare=False)
+
+    def __post_init__(self) -> None:
+        # Unconditional, like InputDomain. A guard on `isinstance(..., tuple)` would let
+        # an already-tuple shape skip int() coercion, so np.int64 dims would survive
+        # construction and only fail later at json.dumps in the execution table.
+        object.__setattr__(self, "shape", tuple(int(s) for s in self.shape))
 
     def metadata(self) -> dict[str, Any]:
         """Everything except tensor payloads — this is what lands in Parquet."""
@@ -595,15 +608,29 @@ class CaseGroup:
     cases: tuple[Case, ...]
 
     def __post_init__(self) -> None:
+        # Normalize unconditionally, as InputDomain does. A guarded normalization would
+        # let an already-tuple value skip int() coercion, so np.int64 dims would survive
+        # construction and only fail later at json.dumps in the execution table.
+        object.__setattr__(self, "cases", tuple(self.cases))
         bases = [c for c in self.cases if c.relation == BASE_RELATION]
         if len(bases) != 1:
-            raise ValueError(f"group {self.group_id} needs exactly one base case, got {len(bases)}")
+            raise ValueError(
+                f"group {self.group_id} needs exactly one base case, got {len(bases)}"
+            )
         for case in self.cases:
             if case.group_id != self.group_id:
                 raise ValueError(
                     f"group_id mismatch: case {case.case_id} has {case.group_id!r}, "
                     f"group is {self.group_id!r}"
                 )
+        # Without these, by_relation() silently returns only the first of several
+        # partners and the rest become unreachable through the public API.
+        relations = [c.relation for c in self.cases]
+        if len(set(relations)) != len(relations):
+            raise ValueError(f"group {self.group_id} has duplicate relations: {relations}")
+        ids = [c.case_id for c in self.cases]
+        if len(set(ids)) != len(ids):
+            raise ValueError(f"group {self.group_id} has duplicate case_ids: {ids}")
 
     @property
     def base(self) -> Case:
