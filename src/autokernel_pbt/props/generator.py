@@ -44,21 +44,25 @@ class Generator:
             raise ValueError(msg)
         return factory()
 
-    def _warn_unexercised_shapes(self, n_groups: int) -> None:
+    def _unexercised_shapes_warning(self, n_groups: int) -> str | None:
         """Boundary shape coverage is the design's main recall mechanism.
 
         Coverage is "was this shape visited at all", not frequency-weighted, so an
         uneven split across shapes is fine -- only a never-visited shape loses recall.
+        ``n_groups == 0`` means "produce nothing" and is explicitly supported, so it
+        is silent: there is no coverage to lose when no cases were asked for.
+
+        Returns the warning message, or None if coverage is fine. The caller emits it
+        so that ``stacklevel=2`` points at user code rather than at this module.
         """
-        if n_groups >= len(self.domain.shapes):
-            return
+        if n_groups == 0 or n_groups >= len(self.domain.shapes):
+            return None
         unexercised = self.domain.shapes[n_groups:]
-        msg = (
+        return (
             f"n_groups={n_groups} is fewer than the {len(self.domain.shapes)} shapes in "
             f"domain {self.domain.task_id!r}; these shapes will never be exercised: "
             f"{list(unexercised)}"
         )
-        warnings.warn(msg, stacklevel=2)
 
     def generate(self, n_groups: int) -> list[CaseGroup]:
         """Generate ``n_groups`` case groups.
@@ -74,7 +78,9 @@ class Generator:
         """
         if n_groups < 0:
             raise ValueError(f"n_groups must be non-negative, got {n_groups}")
-        self._warn_unexercised_shapes(n_groups)
+        coverage_warning = self._unexercised_shapes_warning(n_groups)
+        if coverage_warning is not None:
+            warnings.warn(coverage_warning, stacklevel=2)
         groups: list[CaseGroup] = []
         for index in range(n_groups):
             # One independent stream per group: group i's bytes depend only on

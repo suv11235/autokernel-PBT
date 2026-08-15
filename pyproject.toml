@@ -36,6 +36,10 @@ packages = ["src/autokernel_pbt"]
 testpaths = ["tests"]
 pythonpath = ["src"]
 addopts = "-ra --strict-markers"
+# Warnings are a fail-loud channel, not advisory noise: without this, sediment
+# accumulates in the summary until a genuinely new warning becomes invisible.
+# Tests that legitimately provoke a warning opt out with @pytest.mark.filterwarnings.
+filterwarnings = ["error"]
 markers = [
   "gpu: requires CUDA GPU",
   "integration: cross-component tests",

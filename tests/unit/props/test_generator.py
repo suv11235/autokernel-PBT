@@ -23,6 +23,10 @@ def test_same_seed_gives_identical_tensors():
         assert np.array_equal(ga.base.tensors["x"], gb.base.tensors["x"])
 
 
+# Mandated test: calls generate(1) on the 3-shape DOMAIN, so it legitimately trips
+# the shape-coverage warning. Ignored rather than shown so the suite carries no
+# standing warnings; the warning itself is pinned by the two dedicated tests below.
+@pytest.mark.filterwarnings("ignore::UserWarning")
 def test_different_seed_gives_different_tensors():
     a = Generator(DOMAIN, seed=1).generate(1)
     b = Generator(DOMAIN, seed=2).generate(1)
@@ -34,6 +38,10 @@ def test_every_shape_visited_before_repeat():
     assert {g.base.shape for g in groups} == set(DOMAIN.shapes)
 
 
+# Mandated test: calls generate(1) on the 3-shape DOMAIN, so it legitimately trips
+# the shape-coverage warning. Ignored rather than shown so the suite carries no
+# standing warnings; the warning itself is pinned by the two dedicated tests below.
+@pytest.mark.filterwarnings("ignore::UserWarning")
 def test_group_contains_base_plus_each_relation():
     groups = Generator(DOMAIN, seed=0).generate(1)
     relations = {c.relation for c in groups[0].cases}
@@ -45,6 +53,10 @@ def test_group_ids_are_unique():
     assert len({g.group_id for g in groups}) == 6
 
 
+# Mandated test: calls generate(1) on the 3-shape DOMAIN, so it legitimately trips
+# the shape-coverage warning. Ignored rather than shown so the suite carries no
+# standing warnings; the warning itself is pinned by the two dedicated tests below.
+@pytest.mark.filterwarnings("ignore::UserWarning")
 def test_dtype_is_honoured():
     groups = Generator(DOMAIN, seed=0).generate(1)
     assert groups[0].base.tensors["x"].dtype == np.float32
@@ -74,10 +86,9 @@ def test_every_case_is_byte_identical_across_same_seeded_runs():
 def test_prefix_is_stable_across_generation_count():
     """generate(10) reproduces the first 4 groups of generate(4) exactly.
 
-    The rng is drawn from a fresh ``default_rng(seed)`` per ``generate`` call and
-    consumed in a fixed order per group, so group i depends only on the seed and
-    on i -- never on how many groups were requested. Recorded runs stay
-    replayable when a case budget is widened.
+    Each group draws from its own ``default_rng([seed, index])`` stream, so group
+    i's bytes are a pure function of (seed, i) -- nothing about the requested count
+    can reach them. Recorded runs stay replayable when a case budget is widened.
     """
     short = Generator(DOMAIN, seed=99).generate(4)
     long = Generator(DOMAIN, seed=99).generate(10)
@@ -159,6 +170,20 @@ def test_full_shape_coverage_does_not_warn():
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         Generator(DOMAIN, seed=0).generate(3)
+
+
+def test_zero_groups_does_not_warn_about_coverage():
+    """Asking for nothing cannot lose shape coverage -- there is nothing to cover."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert Generator(DOMAIN, seed=0).generate(0) == []
+
+
+def test_coverage_warning_points_at_the_caller():
+    """The warning must name the misconfiguring call site, not generator.py."""
+    with pytest.warns(UserWarning) as record:
+        Generator(DOMAIN, seed=0).generate(2)
+    assert record[0].filename == __file__
 
 
 def test_unknown_relation_raises_value_error():
