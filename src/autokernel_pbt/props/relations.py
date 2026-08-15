@@ -7,7 +7,12 @@ from typing import Callable, Protocol
 
 import numpy as np
 
+from autokernel_pbt.props.backends.base import HELPER_PREFIX
 from autokernel_pbt.props.case import Case
+
+# The backend filters tensors by this prefix before calling the kernel; the name
+# is derived from it so the two cannot drift apart.
+PERM_KEY = f"{HELPER_PREFIX}perm{HELPER_PREFIX}"
 
 
 class Relation(Protocol):
@@ -94,7 +99,7 @@ class PermuteLastAxis:
         x = tensors["x"]
         perm = rng.permutation(x.shape[-1])
         tensors["x"] = np.take(x, perm, axis=-1)
-        tensors["__perm__"] = perm.astype(np.int64)
+        tensors[PERM_KEY] = perm.astype(np.int64)
         return _derived(base, self.name, tensors)
 
 
