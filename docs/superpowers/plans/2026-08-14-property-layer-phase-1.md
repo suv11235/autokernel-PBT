@@ -159,29 +159,48 @@ actually exists and is collectable. This is the mechanism the SDD ADR asks for.
 
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 import yaml
 
 ACCEPTANCE = "specs/features/0004-property-oracle-layer/acceptance.yaml"
 
+# The check vocabulary already used by features 0001 and 0002. Pinning it means a
+# typo'd type (e.g. "unit_tests") fails loudly instead of silently filtering the
+# criterion out of every traceability check below.
+KNOWN_CHECK_TYPES = {
+    "unit_test",
+    "cli_help",
+    "json_schema",
+    "field_present",
+    "field_equals",
+    "config_equals",
+}
 
-def _criteria(repo_root):
+
+def _criteria(repo_root: Path) -> list[dict]:
     data = yaml.safe_load((repo_root / ACCEPTANCE).read_text())
     return data["criteria"]
 
 
 @pytest.mark.spec
-def test_0004_acceptance_file_is_wellformed(repo_root):
+def test_0004_acceptance_file_is_wellformed(repo_root: Path):
     data = yaml.safe_load((repo_root / ACCEPTANCE).read_text())
     assert data["feature_id"] == "0004"
     ids = [c["id"] for c in data["criteria"]]
     assert ids, "acceptance.yaml declares no criteria"
     assert len(ids) == len(set(ids)), f"duplicate criterion ids: {ids}"
+    unknown = [
+        f"{c['id']} -> {c['check']['type']}"
+        for c in data["criteria"]
+        if c["check"]["type"] not in KNOWN_CHECK_TYPES
+    ]
+    assert not unknown, f"unknown check types (typo?): {unknown}"
 
 
 @pytest.mark.spec
-def test_0004_every_criterion_names_an_existing_file(repo_root):
+def test_0004_every_criterion_names_an_existing_file(repo_root: Path):
     missing = []
     for criterion in _criteria(repo_root):
         check = criterion["check"]
@@ -194,18 +213,24 @@ def test_0004_every_criterion_names_an_existing_file(repo_root):
 
 
 @pytest.mark.spec
-def test_0004_every_criterion_is_collectable(repo_root):
+def test_0004_every_criterion_is_collectable(repo_root: Path):
     """A criterion pointing at a non-existent test node is untraceable, so it fails."""
     node_ids = [
         c["check"]["test"] for c in _criteria(repo_root) if c["check"]["type"] == "unit_test"
     ]
+    # Without this guard the subprocess collects the whole default testpath and
+    # exits 0, reporting success while having traced nothing.
+    assert node_ids, "no unit_test criteria to collect"
     proc = subprocess.run(
         [sys.executable, "-m", "pytest", "--collect-only", "-q", *node_ids],
         capture_output=True,
         text=True,
         cwd=repo_root,
+        timeout=120,
     )
-    assert proc.returncode == 0, f"pytest could not collect all criteria:\n{proc.stdout}\n{proc.stderr}"
+    assert proc.returncode == 0, (
+        f"pytest could not collect all criteria:\n{proc.stdout}\n{proc.stderr}"
+    )
 ```
 
 - [ ] **Step 4: Register the feature**
