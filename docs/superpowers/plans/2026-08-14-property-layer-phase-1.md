@@ -29,7 +29,205 @@
 | `src/autokernel_pbt/props/oracle.py` | `ReferenceOracle`, `DeclarativeOracle`, `HybridOracle` |
 | `src/autokernel_pbt/props/tasks.py` | Task registry for the elementwise→reduction ladder |
 
-Tests mirror this under `tests/unit/props/`, with one integration test at `tests/integration/test_record_replay.py`.
+| `specs/features/0004-property-oracle-layer/spec.md` | Human-readable requirement (Task 0) |
+| `specs/features/0004-property-oracle-layer/acceptance.yaml` | Machine-checkable criteria (Task 0) |
+| `kernels/tasks/softmax/acceptance.yaml` | Per-kernel property contract (Task 13) |
+
+Tests mirror this under `tests/unit/props/`, with spec tests at `tests/spec/` and one integration test at `tests/integration/test_record_replay.py`.
+
+**Spec-driven note.** This repo requires spec-before-code (`specs/README.md`, `docs/adr/0001-sdd-tdd.md`). Task 0 writes the spec and acceptance criteria first; Tasks 1–12 turn them green. Feature id **0004** is used rather than reusing the retired 0003.
+
+`spec.md` authoring migrates to GitHub spec-kit in a later phase; `acceptance.yaml` stays hand-owned permanently, because spec-kit produces natural-language artifacts and has no machine-checkable acceptance mechanism. Do **not** install spec-kit in this plan.
+
+---
+
+### Task 0: Spec and acceptance criteria (red)
+
+Write the spec first and prove the acceptance criteria are not yet satisfiable. The criteria name
+test node ids that Tasks 1–12 will create, so this task's spec test fails until they exist — that
+failure *is* the red state.
+
+**Files:**
+- Create: `specs/features/0004-property-oracle-layer/spec.md`
+- Create: `specs/features/0004-property-oracle-layer/acceptance.yaml`
+- Create: `tests/spec/test_0004_property_layer.py`
+- Modify: `specs/README.md` (feature index table)
+
+- [ ] **Step 1: Write the spec**
+
+Create `specs/features/0004-property-oracle-layer/spec.md`:
+
+```markdown
+# Feature 0004: Property/oracle layer (phase 1, CPU)
+
+## Problem
+
+A kernel is not self-describing. Something must decide whether an execution was correct. That
+decision procedure is the **oracle**. The project compares three oracle strategies, so oracle
+choice must be a variable that can be changed without changing anything else — including the
+inputs the kernel saw.
+
+## Scope
+
+Batch-first record/replay, CPU only:
+
+1. **Generate** — deterministic, seeded case sets described by a serializable `InputDomain`.
+   Related inputs are emitted as **case groups** so metamorphic properties are expressible.
+2. **Execute** — one backend pass over the whole batch, persisting inputs, outputs and telemetry.
+3. **Check** — oracles evaluated offline over the recorded table, never influencing generation.
+
+Three oracle arms: reference (one strong property), declarative (many weak properties), hybrid.
+
+Every property verdict is recorded individually and tagged with its tier and whether it required
+a numerical tolerance.
+
+## Non-goals
+
+- Mutation corpus, metrics, and shrinking (phase 2)
+- CUDA / Triton / NKI backends and tier-2 telemetry (phase 3)
+- bfloat16 (no native NumPy dtype; arrives with the device backends)
+- Attention and GEMM tasks; KernelBench integration
+
+## Acceptance
+
+See [acceptance.yaml](./acceptance.yaml).
+```
+
+- [ ] **Step 2: Write the acceptance criteria**
+
+Create `specs/features/0004-property-oracle-layer/acceptance.yaml`:
+
+```yaml
+feature_id: "0004"
+feature_name: property-oracle-layer
+version: 1
+
+criteria:
+  - id: DETERMINISTIC_GENERATION
+    description: the same seed reproduces byte-identical inputs
+    check:
+      type: unit_test
+      test: tests/unit/props/test_generator.py::test_same_seed_gives_identical_tensors
+
+  - id: CASE_GROUPS
+    description: related cases share a group id and are retrievable by relation
+    check:
+      type: unit_test
+      test: tests/unit/props/test_case.py::test_group_finds_case_by_relation
+
+  - id: TABLE_ROUND_TRIP
+    description: recorded tensors survive persistence bitwise
+    check:
+      type: unit_test
+      test: tests/unit/props/test_table.py::test_round_trip_preserves_tensors_bitwise
+
+  - id: THREE_VALUED_VERDICT
+    description: an empty property set is inconclusive, never a pass
+    check:
+      type: unit_test
+      test: tests/unit/props/test_verdict.py::test_empty_results_are_inconclusive_not_pass
+
+  - id: DIMENSIONLESS_TOLERANCE
+    description: the reference arm uses a scale-invariant test ratio, not allclose
+    check:
+      type: unit_test
+      test: tests/unit/props/test_tolerance.py::test_ratio_is_dimensionless_across_scale
+
+  - id: PROPERTY_ATTRIBUTION
+    description: each verdict records the property name and its tolerance-free flag
+    check:
+      type: unit_test
+      test: tests/unit/props/test_oracle.py::test_declarative_oracle_records_tolerance_free_flag
+
+  - id: REPLAY_FAIRNESS
+    description: oracle arms score identical recorded executions
+    check:
+      type: unit_test
+      test: tests/integration/test_record_replay.py::test_both_arms_see_byte_identical_inputs
+```
+
+- [ ] **Step 3: Write the spec test**
+
+Create `tests/spec/test_0004_property_layer.py`:
+
+```python
+"""Spec-derived acceptance tests (feature 0004).
+
+These assert traceability: every criterion in acceptance.yaml must name a test that
+actually exists and is collectable. This is the mechanism the SDD ADR asks for.
+"""
+
+import subprocess
+import sys
+
+import pytest
+import yaml
+
+ACCEPTANCE = "specs/features/0004-property-oracle-layer/acceptance.yaml"
+
+
+def _criteria(repo_root):
+    data = yaml.safe_load((repo_root / ACCEPTANCE).read_text())
+    return data["criteria"]
+
+
+@pytest.mark.spec
+def test_0004_acceptance_file_is_wellformed(repo_root):
+    data = yaml.safe_load((repo_root / ACCEPTANCE).read_text())
+    assert data["feature_id"] == "0004"
+    ids = [c["id"] for c in data["criteria"]]
+    assert ids, "acceptance.yaml declares no criteria"
+    assert len(ids) == len(set(ids)), f"duplicate criterion ids: {ids}"
+
+
+@pytest.mark.spec
+def test_0004_every_criterion_names_an_existing_file(repo_root):
+    missing = []
+    for criterion in _criteria(repo_root):
+        check = criterion["check"]
+        if check["type"] != "unit_test":
+            continue
+        path = check["test"].split("::")[0]
+        if not (repo_root / path).exists():
+            missing.append(f"{criterion['id']} -> {path}")
+    assert not missing, f"criteria reference missing test files: {missing}"
+
+
+@pytest.mark.spec
+def test_0004_every_criterion_is_collectable(repo_root):
+    """A criterion pointing at a non-existent test node is untraceable, so it fails."""
+    node_ids = [
+        c["check"]["test"] for c in _criteria(repo_root) if c["check"]["type"] == "unit_test"
+    ]
+    proc = subprocess.run(
+        [sys.executable, "-m", "pytest", "--collect-only", "-q", *node_ids],
+        capture_output=True,
+        text=True,
+        cwd=repo_root,
+    )
+    assert proc.returncode == 0, f"pytest could not collect all criteria:\n{proc.stdout}\n{proc.stderr}"
+```
+
+- [ ] **Step 4: Register the feature**
+
+In `specs/README.md`, add a row to the feature index table beneath the 0002 row:
+
+```markdown
+| [0004](./features/0004-property-oracle-layer/spec.md) | Property/oracle layer (phase 1) | in progress |
+```
+
+- [ ] **Step 5: Run the spec test to verify it fails (red)**
+
+Run: `pytest tests/spec/test_0004_property_layer.py -v`
+Expected: `test_0004_acceptance_file_is_wellformed` PASSES; the other two FAIL, because none of
+the referenced test files exist yet. This red state is the point of the task.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add specs/features/0004-property-oracle-layer tests/spec/test_0004_property_layer.py specs/README.md
+scripts/git_commit_clean.sh -m "spec: add feature 0004 property/oracle layer acceptance criteria"
+```
 
 ---
 
@@ -2025,8 +2223,245 @@ scripts/git_commit_clean.sh -m "feat: add task registry and record/replay integr
 
 ---
 
+### Task 13: Kernel acceptance contracts drive the declarative oracle
+
+This is the bridge between spec-driven and property-based development. A kernel's
+`acceptance.yaml` names the properties it must satisfy, and the declarative oracle is *built from
+that file* rather than hand-assembled in Python. Writing the spec becomes writing the oracle —
+which is exactly what the authoring-cost metric will later measure.
+
+**Files:**
+- Create: `kernels/tasks/softmax/acceptance.yaml`
+- Create: `kernels/tasks/relu/acceptance.yaml`
+- Modify: `src/autokernel_pbt/props/properties.py` (append the registry)
+- Create: `src/autokernel_pbt/props/contract.py`
+- Test: `tests/unit/props/test_contract.py`
+
+- [ ] **Step 1: Write the failing test**
+
+Create `tests/unit/props/test_contract.py`:
+
+```python
+"""Kernel acceptance contract tests."""
+
+import pytest
+
+from autokernel_pbt.props.contract import (
+    UnknownPropertyError,
+    load_contract,
+    oracle_from_contract,
+)
+
+
+def test_loads_softmax_contract(repo_root):
+    contract = load_contract(repo_root / "kernels/tasks/softmax/acceptance.yaml")
+    assert contract.task_id == "softmax"
+    assert "rows_sum_to_one" in contract.property_names
+
+
+def test_builds_declarative_oracle_from_contract(repo_root):
+    contract = load_contract(repo_root / "kernels/tasks/softmax/acceptance.yaml")
+    oracle = oracle_from_contract(contract)
+    names = {p.name for p in oracle.case_properties} | {p.name for p in oracle.group_properties}
+    assert names == set(contract.property_names)
+
+
+def test_relu_contract_has_no_group_properties(repo_root):
+    oracle = oracle_from_contract(load_contract(repo_root / "kernels/tasks/relu/acceptance.yaml"))
+    assert oracle.group_properties == ()
+
+
+def test_unknown_property_name_is_rejected(tmp_path):
+    path = tmp_path / "acceptance.yaml"
+    path.write_text(
+        "task_id: fake\nversion: 1\ncriteria:\n"
+        "  - id: BOGUS\n    description: nope\n"
+        "    check:\n      type: property\n      property: no_such_property\n"
+    )
+    with pytest.raises(UnknownPropertyError, match="no_such_property"):
+        oracle_from_contract(load_contract(path))
+
+
+def test_every_criterion_carries_a_description(repo_root):
+    contract = load_contract(repo_root / "kernels/tasks/softmax/acceptance.yaml")
+    assert all(c.description for c in contract.criteria)
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `pytest tests/unit/props/test_contract.py -v`
+Expected: FAIL with `ModuleNotFoundError: No module named 'autokernel_pbt.props.contract'`
+
+- [ ] **Step 3: Add the property registry**
+
+Append to `src/autokernel_pbt/props/properties.py`:
+
+```python
+# Registry so acceptance.yaml can name properties by string. Keep in sync when
+# adding a property: an unregistered property cannot appear in a kernel contract.
+CASE_PROPERTY_REGISTRY: dict[str, type] = {
+    OutputsAreFinite.name: OutputsAreFinite,
+    ValuesInUnitInterval.name: ValuesInUnitInterval,
+    RowsSumToOne.name: RowsSumToOne,
+}
+
+GROUP_PROPERTY_REGISTRY: dict[str, type] = {
+    ShiftInvariance.name: ShiftInvariance,
+}
+```
+
+- [ ] **Step 4: Write the contract loader**
+
+Create `src/autokernel_pbt/props/contract.py`:
+
+```python
+"""Kernel acceptance contracts: acceptance.yaml -> DeclarativeOracle.
+
+The spec is the oracle. A kernel's acceptance criteria name properties, and the
+declarative arm is constructed from that file rather than assembled by hand, so
+spec-driven and property-based development share one artifact.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+
+import yaml
+
+from autokernel_pbt.props.oracle import DeclarativeOracle
+from autokernel_pbt.props.properties import CASE_PROPERTY_REGISTRY, GROUP_PROPERTY_REGISTRY
+
+PROPERTY_CHECK = "property"
+
+
+class UnknownPropertyError(KeyError):
+    """A contract named a property that is not in either registry."""
+
+
+@dataclass(frozen=True)
+class Criterion:
+    id: str
+    description: str
+    property_name: str
+
+
+@dataclass(frozen=True)
+class Contract:
+    task_id: str
+    criteria: tuple[Criterion, ...]
+
+    @property
+    def property_names(self) -> tuple[str, ...]:
+        return tuple(c.property_name for c in self.criteria)
+
+
+def load_contract(path: Path | str) -> Contract:
+    data = yaml.safe_load(Path(path).read_text())
+    criteria = tuple(
+        Criterion(
+            id=entry["id"],
+            description=entry["description"],
+            property_name=entry["check"]["property"],
+        )
+        for entry in data["criteria"]
+        if entry["check"]["type"] == PROPERTY_CHECK
+    )
+    return Contract(task_id=data["task_id"], criteria=criteria)
+
+
+def oracle_from_contract(contract: Contract) -> DeclarativeOracle:
+    case_props = []
+    group_props = []
+    for name in contract.property_names:
+        if name in CASE_PROPERTY_REGISTRY:
+            case_props.append(CASE_PROPERTY_REGISTRY[name]())
+        elif name in GROUP_PROPERTY_REGISTRY:
+            group_props.append(GROUP_PROPERTY_REGISTRY[name]())
+        else:
+            raise UnknownPropertyError(
+                f"{name!r} is not a registered property "
+                f"(task {contract.task_id!r}); add it to a registry in properties.py"
+            )
+    return DeclarativeOracle(tuple(case_props), tuple(group_props))
+```
+
+- [ ] **Step 5: Write the kernel contracts**
+
+Create `kernels/tasks/softmax/acceptance.yaml`:
+
+```yaml
+task_id: softmax
+version: 1
+
+criteria:
+  - id: FINITE_OUTPUT
+    description: no NaN or Inf in the output
+    check:
+      type: property
+      property: outputs_are_finite
+
+  - id: PROBABILITY_RANGE
+    description: every output value lies in [0, 1]
+    check:
+      type: property
+      property: values_in_unit_interval
+
+  - id: NORMALIZED
+    description: each row of the output sums to one
+    check:
+      type: property
+      property: rows_sum_to_one
+
+  - id: SHIFT_INVARIANT
+    description: adding a per-row constant to the input leaves the output unchanged
+    check:
+      type: property
+      property: shift_invariance
+```
+
+Create `kernels/tasks/relu/acceptance.yaml`:
+
+```yaml
+task_id: relu
+version: 1
+
+criteria:
+  - id: FINITE_OUTPUT
+    description: no NaN or Inf in the output
+    check:
+      type: property
+      property: outputs_are_finite
+```
+
+- [ ] **Step 6: Run test to verify it passes**
+
+Run: `pytest tests/unit/props/test_contract.py -v`
+Expected: PASS, 5 passed
+
+- [ ] **Step 7: Verify the feature 0004 spec tests are now green**
+
+Run: `pytest tests/spec/test_0004_property_layer.py -v`
+Expected: PASS, 3 passed — every acceptance criterion now resolves to a collectable test.
+
+- [ ] **Step 8: Run the whole suite**
+
+Run: `pytest -m "not gpu" -q`
+Expected: PASS, all tests green
+
+- [ ] **Step 9: Commit**
+
+```bash
+git add kernels/tasks src/autokernel_pbt/props/contract.py src/autokernel_pbt/props/properties.py tests/unit/props/test_contract.py
+scripts/git_commit_clean.sh -m "feat: build declarative oracles from kernel acceptance contracts"
+```
+
+---
+
 ## Definition of Done
 
+- [ ] Feature 0004 spec tests pass — every acceptance criterion resolves to a collectable test
+- [ ] A kernel's declarative oracle is constructed from its `acceptance.yaml`, not hand-assembled
 - [ ] `pytest -m "not gpu"` passes with no failures
 - [ ] `ruff check src tests` passes
 - [ ] A recorded run can be replayed through two oracle arms with no backend involvement
@@ -2043,3 +2478,9 @@ These belong to Phases 2 and 3 and must not be built here:
 - Hypothesis corpus harvesting — the seeded NumPy generator is sufficient until Phase 2 needs
   float edge-case tuning
 - Attention and GEMM tasks; KernelBench integration
+- **GitHub spec-kit adoption.** Do not install `specify-cli` or create `.specify/` in this plan.
+  Task 0 and Task 13 hand-author the spec artifacts. Once the property vocabulary exists, a
+  follow-on phase adds a kernel-specific spec-kit extension that generates `spec.md` and drafts
+  the `acceptance.yaml` property list; the machine-checkable `acceptance.yaml` contract defined in
+  Task 13 remains hand-owned, because spec-kit produces natural-language artifacts only. Pin the
+  spec-kit version when that phase lands.
