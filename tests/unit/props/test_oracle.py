@@ -43,7 +43,10 @@ from autokernel_pbt.props.properties import (
     ValuesInUnitInterval,
 )
 from autokernel_pbt.props.relations import ShiftRows
+from autokernel_pbt.props.tolerance import DEFAULT_THRESH
 from autokernel_pbt.props.verdict import TIER_PORTABLE, PropertyResult, Verdict
+
+EPS32 = float(np.finfo(np.float32).eps)
 
 X = np.array([[1.0, 2.0, 3.0], [0.5, 0.5, 0.5]], dtype=np.float32)
 SHIFT = np.array([[10.0], [-5.0]], dtype=np.float32)
@@ -186,6 +189,27 @@ def test_a_satisfied_property_set_is_accepted():
     validate_property_set([*SOFTMAX_CASE_PROPERTIES, *SOFTMAX_GROUP_PROPERTIES])
     # The shipped bundle is exactly what DeclarativeOracle is built with elsewhere.
     assert _declarative().name == "declarative"
+
+
+def test_an_empty_property_set_is_rejected():
+    """An oracle with no properties judges nothing and reports INCONCLUSIVE.
+
+    Same defect as an empty case group, through a different door: it adds a group
+    that established nothing to the denominator of the detection rate, with no error
+    anywhere. Task 13 builds sets from acceptance.yaml by name, so an omitted or
+    misspelled `properties:` key reaches exactly here.
+    """
+    with pytest.raises(ValueError, match="empty property set"):
+        validate_property_set([])
+    with pytest.raises(ValueError, match="empty property set"):
+        DeclarativeOracle([])
+    with pytest.raises(ValueError, match="empty property set"):
+        DeclarativeOracle([], [])
+
+
+def test_an_empty_property_set_would_otherwise_report_inconclusive():
+    """Guards the test above by showing what it prevents, via the raw summary path."""
+    assert summary([]) is Verdict.INCONCLUSIVE
 
 
 def test_a_property_set_with_no_deferrals_at_all_is_accepted():
@@ -339,10 +363,12 @@ def test_reference_oracle_fails_on_a_wrong_kernel():
     assert summary(_reference().evaluate(_group(_sharpened))) is Verdict.FAIL
 
 
-def test_reference_oracle_fails_on_a_shape_mismatch():
-    """residual_ratio returns inf for disagreeing shapes; that is a real defect."""
+def test_reference_oracle_fails_on_a_wrong_shaped_kernel_output():
+    """The detection the shape branch must not lose: the kernel returned the wrong shape."""
     y = _softmax(X)[:, :2]
-    assert _reference().evaluate([_row(X, y)])[0].verdict is Verdict.FAIL
+    result = _reference().evaluate([_row(X, y)])[0]
+    assert result.verdict is Verdict.FAIL
+    assert "shape mismatch" in result.detail
 
 
 def test_reference_oracle_threshold_is_configurable_and_used():
@@ -372,6 +398,164 @@ def test_reference_oracle_reads_the_kernel_inputs_not_the_bookkeeping_tensors():
 
     assert ReferenceOracle(spy).evaluate([row])[0].verdict is Verdict.PASS
     assert set(seen) == {"x"}
+
+
+# --------------------------------------------------------------------------
+# A broken reference is the harness's fault, not the kernel's
+# --------------------------------------------------------------------------
+
+
+def _reference_defect_result(bad_reference) -> PropertyResult:
+    row = _row(X, _softmax(X))  # the kernel is CORRECT in every one of these
+    return ReferenceOracle(bad_reference).evaluate([row])[0]
+
+
+def test_a_nan_returning_reference_does_not_fail_a_correct_kernel():
+    """residual_ratio answers inf for a non-finite reference, and inf is a FAIL.
+
+    Left unchecked that books a correct kernel as a caught bug — a false positive in
+    the headline metric, manufactured by the harness — with a detail string that
+    names the kernel and sends triage to the wrong place entirely.
+    """
+    result = _reference_defect_result(lambda **kw: np.full_like(kw["x"], np.nan))
+    assert result.verdict is Verdict.INCONCLUSIVE
+    assert "the reference, not the kernel" in result.detail
+    assert result.case_id == "c-base"
+
+
+def test_a_shape_disagreement_is_a_fail_that_does_not_blame_either_side():
+    """Shape mismatch is symmetric, so it is deliberately NOT the reference's fault.
+
+    Nothing here knows the correct output shape independently, so "the reference is
+    wrong" and "the kernel returned the wrong shape" are the same observation.
+    Downgrading it to INCONCLUSIVE would permanently blind the strong arm to
+    wrong-shaped output — a common, serious kernel bug this arm exists to catch —
+    to guard against a harness bug that disagrees on *every* row and so is loudly
+    visible. The honest thing is to FAIL and say in the detail that the arm cannot
+    tell which side is wrong.
+    """
+    result = _reference_defect_result(lambda **kw: _softmax(kw["x"])[:, :2])
+    assert result.verdict is Verdict.FAIL
+    assert "cannot tell which" in result.detail
+    # Both shapes are named, so triage can see at a glance which side looks wrong.
+    assert "(2, 3)" in result.detail and "(2, 2)" in result.detail
+
+
+def test_an_overflowing_reference_neither_aborts_nor_fails_a_correct_kernel():
+    """The config-dependent path, which is disqualifying for a replay-fairness project.
+
+    An unstable reference (exp with no max-subtraction) overflows to inf. Under this
+    project's `filterwarnings = ["error"]` that RuntimeWarning is raised, aborting the
+    whole scoring pass partway and discarding the already-paid-for hardware time in
+    the rest of the table; under production config the same defect silently FAILs a
+    correct kernel. Two different behaviours from one reference bug. Suppressing numpy
+    error state around the reference call and validating its output collapses both to
+    one INCONCLUSIVE row.
+    """
+    def unstable(**kw: np.ndarray) -> np.ndarray:
+        e = np.exp(kw["x"] * np.float32(1e3))  # overflows float32
+        return (e / e.sum(axis=-1, keepdims=True)).astype(np.float32)
+
+    result = _reference_defect_result(unstable)  # must not raise
+    assert result.verdict is Verdict.INCONCLUSIVE
+    assert "the reference, not the kernel" in result.detail
+
+
+def test_a_reference_that_raises_still_propagates():
+    """The defensible core of the original position, now actually pinned.
+
+    An exception is unambiguous and cannot be mistaken for a finding about the
+    kernel. Mapping it to INCONCLUSIVE would let a wholly broken reference reduce
+    this arm to a silent no-op across an entire run, which is the one failure the
+    comparison cannot detect from its own output.
+    """
+    def broken(**_: np.ndarray) -> np.ndarray:
+        raise RuntimeError("reference implementation is broken")
+
+    with pytest.raises(RuntimeError, match="reference implementation is broken"):
+        ReferenceOracle(broken).evaluate([_row(X, _softmax(X))])
+
+
+def test_reference_validation_does_not_swallow_a_real_kernel_defect():
+    """Guards the three tests above: the check is on the reference side only.
+
+    A NaN in the *kernel's* output must still FAIL — it is the kernel's defect, and
+    the reference arm is the strong arm precisely because it sees it.
+    """
+    bad = _softmax(X).copy()
+    bad[0, 0] = np.nan
+    assert _reference().evaluate([_row(X, bad)])[0].verdict is Verdict.FAIL
+
+
+def test_a_zero_dimensional_reference_matches_a_normalized_output():
+    """single_output promotes 0-d to (1,); a plain reduction reference stays 0-d.
+
+    The shape validation must not reject that legitimate pairing, or every reduction
+    kernel in the corpus would come back INCONCLUSIVE.
+    """
+    x = np.array([[1.0, 2.0, 3.0]], dtype=np.float32)
+    got = np.atleast_1d(np.sum(x))  # what the execution boundary records
+    result = ReferenceOracle(lambda **kw: np.sum(kw["x"])).evaluate([_row(x, got)])[0]
+    assert result.verdict is Verdict.PASS
+
+
+# --------------------------------------------------------------------------
+# The accumulation length comes from the input, not the output
+# --------------------------------------------------------------------------
+
+
+def test_reduction_ratio_normalizes_by_the_input_length_not_the_output_length():
+    """A reduction's output last axis is what the error was reduced *into*.
+
+    This is the RowsSumToOne trap one module over, on the other side of the
+    comparison. The kernel here is correct to within 120 ulps of a unit-scale
+    reference, over an accumulation of 262144 elements. Normalized by the input's
+    last axis the ratio is 120/log2(262144) = 6.67 and PASSes; normalized by the
+    output's last axis (1) the divisor floors to 1.0, the ratio is 120, and a correct
+    kernel is booked as a caught bug. The two straddle DEFAULT_THRESH = 30, so this
+    test flips outright if the length is taken from the wrong side.
+    """
+    cols = 262144
+    x = np.zeros((2, cols), dtype=np.float32)
+    got = np.array([np.float32(1.0) + 120 * EPS32], dtype=np.float32)
+
+    result = ReferenceOracle(lambda **kw: np.array([1.0], dtype=np.float32)).evaluate(
+        [_row(x, got)]
+    )[0]
+
+    assert result.verdict is Verdict.PASS
+    ratio = float(result.detail.split("=")[-1])
+    assert ratio == pytest.approx(120.0 / np.log2(cols), rel=1e-3)
+    assert ratio < DEFAULT_THRESH < 120.0
+
+
+def test_the_accumulation_length_can_be_overridden_for_a_contraction():
+    """GEMM's K is not an output dimension and not the input's last axis either."""
+    cols = 262144
+    x = np.zeros((2, 4), dtype=np.float32)  # input says 4; the real contraction is huge
+    got = np.array([np.float32(1.0) + 120 * EPS32], dtype=np.float32)
+    ref = lambda **kw: np.array([1.0], dtype=np.float32)  # noqa: E731
+
+    assert ReferenceOracle(ref).evaluate([_row(x, got)])[0].verdict is Verdict.FAIL
+    assert ReferenceOracle(ref, n=cols).evaluate([_row(x, got)])[0].verdict is Verdict.PASS
+
+
+def test_a_scalar_input_shape_falls_back_to_no_length_normalization():
+    """`shape=()` has no last axis, and n=0 would abort the pass inside residual_ratio."""
+    x = np.array(2.0, dtype=np.float32)
+    got = np.atleast_1d(np.float32(4.0))
+    result = ReferenceOracle(lambda **kw: np.atleast_1d(kw["x"] * 2)).evaluate([_row(x, got)])[0]
+    assert result.verdict is Verdict.PASS
+
+
+def test_a_zero_length_input_axis_does_not_abort_the_scoring_pass():
+    """residual_ratio rejects n < 1 with a bare ValueError; that must not escape."""
+    x = np.zeros((2, 0), dtype=np.float32)
+    got = np.array([1.0], dtype=np.float32)
+    result = ReferenceOracle(lambda **kw: np.array([1.0], dtype=np.float32)).evaluate(
+        [_row(x, got)]
+    )[0]
+    assert result.verdict is Verdict.PASS
 
 
 # --------------------------------------------------------------------------
