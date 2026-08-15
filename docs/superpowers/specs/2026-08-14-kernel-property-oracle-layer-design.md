@@ -220,6 +220,48 @@ This is a concrete instance of the vacuous-property failure mode the project exi
 found in our own suite — evidence that "the property passed" is uninformative without a
 demonstrated ability to fail.
 
+*The normalization exponent decides whether the reference arm is a strong baseline or a
+strawman.* The test ratio divides the residual by `eps` and by a function of the reduction
+length. Which function matters enormously, measured on float32 softmax/layernorm against float64
+references:
+
+| normalization | correct-kernel ratio, n=64 → 16384 | detection floor at n=4096 | vs `allclose(rtol=1e-5)` |
+|---|---|---|---|
+| `n` (LAPACK's literal convention) | 0.038 → 0.0003 (127× drift) | 1.5e-2 | ~1500× blinder |
+| `√n` | 0.306 → 0.040 (7.6× drift) | 2.3e-4 | ~23× blinder |
+| **`log₂n`** | **0.408 → 0.368 (flat)** | **4.3e-5** | **~4× blinder** |
+| `1` | 2.45 → 5.15 (2.1× drift) | 3.6e-6 | stricter |
+
+Linear `n` — the literal LAPACK convention — would have made the reference arm miss bugs that
+three lines of `np.allclose` catch: a denominator error of 0.3%, a float16 accumulator, a
+dropped element. That would invert the paper's argument, since the reference arm exists to be a
+*strong* baseline. `O(eps·log₂n)` is the textbook bound for **pairwise** summation, which is what
+these backends actually do; linear `n` is the bound for sequential accumulation, a different
+algorithm. A good normalization is identifiable by a correct-kernel ratio that is flat in n.
+
+**Open question this raises.** The ratio and `allclose` do not measure the same thing — the ratio
+is an infinity-norm-scaled backward-style measure, deliberately blind to relative error on tiny
+entries; `allclose` is elementwise forward relative error. A small constant-factor gap is a
+defensible design difference; a large one invites the objection that the reference arm is weaker
+than standard practice.
+
+**Measured outcome under `log₂n`.** On float32 softmax at n=4096 the reference arm now catches
+every injected bug `allclose(rtol=1e-5)` catches — a dropped element (ratio 44.8), a float16
+accumulator (123.7), a 1e-4 denominator error (70.0), a 0.3% denominator error (2090.9) — while a
+correct kernel sits at 0.04, leaving 213×–779× headroom across n=8..16384. The baseline is no
+longer weaker than standard practice on this corpus.
+
+**Unresolved, recorded rather than reconciled.** Two independent measurement harnesses disagree on
+which normalization is *flattest*: one finds `log₂n` flat with `n=1` drifting 2.1×, the other finds
+`n=1` flattest (1.3×) and `log₂n` over-correcting (3.7×, in the conservative direction). Absolute
+magnitudes differ by a consistent 5×, so a setup difference — reference construction or residual
+scaling — remains unidentified. It does not change the choice: `log₂n` is the textbook pairwise
+bound rather than a fit to either dataset, and is safe under both. It would matter if `n=1` were
+revisited.
+
+Whether to additionally report plain `allclose` as a fourth arm — pre-empting the "your baseline is
+weak" objection entirely, at low cost — is undecided.
+
 *Shift invariance is only approximate in reduced precision, and the tolerance dominates.* In
 float16 a wide shift produces genuine deviations of 0.5–2 ulp (median 4.9e-4, p95 9.9e-4 against
 `eps = 9.77e-4`). False-alarm rate is entirely tolerance-driven: 100% at `atol=1e-5`, ~2–4.5% at

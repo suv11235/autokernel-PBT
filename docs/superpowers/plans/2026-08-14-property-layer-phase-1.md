@@ -1574,6 +1574,21 @@ Expected: FAIL with `ModuleNotFoundError: No module named 'autokernel_pbt.props.
 
 - [ ] **Step 3: Write the implementation**
 
+> **The shipped implementation diverges from the sketch below — read the file, not this.**
+> Three changes came out of review, all measured:
+> 1. **`n` normalization is `max(log2(n), 1.0)`, not linear `n`.** LAPACK's literal linear-`n`
+>    convention is the bound for *sequential* accumulation; these backends use pairwise
+>    reduction, whose bound is `O(eps·log₂n)`. Under linear `n` the reference arm missed bugs
+>    that `np.allclose` catches, which would have inverted the paper's argument.
+> 2. **`n` is an explicit keyword.** The default last-axis length is wrong at the row-sum call
+>    site, where the array is already reduced.
+> 3. **Integer/bool candidates raise `ExactDtypeError`** (a `ValueError` subclass) rather than
+>    returning `inf`, because `inf` would record a correct int-returning kernel as a caught bug.
+>    Empty inputs return `NaN` so the vacuous pass is structural. `machine_eps` is private.
+>
+> See `src/autokernel_pbt/props/tolerance.py` and the design doc's tolerance section for the
+> measured tables behind each.
+
 Create `src/autokernel_pbt/props/tolerance.py`:
 
 ```python
@@ -1876,7 +1891,9 @@ class RowsSumToOne:
         if not np.all(np.isfinite(y)):
             return _result(self, Verdict.INCONCLUSIVE, "non-finite output")
         sums = y.sum(axis=-1)
-        ratio = residual_ratio(sums, np.ones_like(sums), dtype=y.dtype)
+        # n= explicitly: `sums` has shape (rows,), so the default last-axis length would
+        # be the ROW COUNT, not the reduction length the normalization is meant to model.
+        ratio = residual_ratio(sums, np.ones_like(sums), dtype=y.dtype, n=y.shape[-1])
         if not within_threshold(ratio):
             return _result(self, Verdict.FAIL, f"row-sum test ratio {ratio:.3g} >= {DEFAULT_THRESH}")
         return _result(self, Verdict.PASS, f"ratio={ratio:.3g}")
