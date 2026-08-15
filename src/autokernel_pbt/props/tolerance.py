@@ -7,6 +7,8 @@ precision. This replaces per-dtype ``rtol``/``atol`` guesses.
 
 from __future__ import annotations
 
+import operator
+
 import numpy as np
 
 # LAPACK uses 30.0 across its entire test suite.
@@ -57,6 +59,27 @@ def _resolve_eps(candidate: np.ndarray, dtype: type | np.dtype | None) -> float:
     return _machine_eps(resolved)
 
 
+def _validate_n(n: int | None) -> int | None:
+    """Check a caller-supplied accumulation length up front.
+
+    Called before any of the early returns, all of which yield inf or NaN: a bad
+    ``n`` validated later would be masked by a shape mismatch or an empty input
+    rather than reported. ``operator.index`` rejects a float outright rather than
+    letting ``n=2.5`` through the ``int`` annotation and into the divisor.
+    """
+    if n is None:
+        return None
+    try:
+        length = operator.index(n)
+    except TypeError as exc:
+        msg = f"n must be an integer accumulation length, got {n!r}"
+        raise TypeError(msg) from exc
+    if length < 1:
+        msg = f"n must be a positive accumulation length, got {length}"
+        raise ValueError(msg)
+    return length
+
+
 def residual_ratio(
     candidate: np.ndarray,
     reference: np.ndarray,
@@ -64,7 +87,7 @@ def residual_ratio(
     dtype: type | np.dtype | None = None,
     n: int | None = None,
 ) -> float:
-    """‖candidate - reference‖_inf / (‖reference‖_inf * eps * sqrt(n)).
+    """‖candidate - reference‖_inf / (‖reference‖_inf * eps * log2(n)).
 
     Returns inf if either side is non-finite or the shapes disagree, and NaN if the
     inputs are empty.
@@ -73,7 +96,8 @@ def residual_ratio(
     explicitly when comparing a low-precision candidate promoted to float64. Raises
     ``ExactDtypeError`` if the resolved dtype is exact.
 
-    ``n`` is the length of the accumulation the error grew over. It defaults to the
+    ``n`` is the length of the accumulation the error grew over, and enters the
+    divisor as ``log2(n)``, the pairwise-summation bound. It defaults to the
     last-axis length, which is right for this corpus's row-wise kernels (softmax,
     layernorm, reductions) but *only* when the candidate is the kernel's output. A
     caller comparing a derived quantity — row sums of an (R, C) output, shape (R,) —
@@ -91,10 +115,12 @@ def residual_ratio(
     mismatch. ``_LADDER_SHAPES`` has no zero dimension today, but ``InputDomain``
     does not forbid one.
     """
-    # Resolve eps FIRST. Every other early return yields inf, so resolving later
-    # would let an exact-dtype candidate that also has a shape mismatch escape as
-    # inf -> FAIL, which is the false positive this raise exists to prevent.
+    # Validate FIRST. Every other exit yields inf or NaN, so a check placed later
+    # is bypassable by a second defect: an exact-dtype candidate that also has a
+    # shape mismatch would escape as inf -> FAIL, the false positive the raise
+    # exists to prevent, and a bad n would be masked by an empty input.
     eps = _resolve_eps(candidate, dtype)
+    given_n = _validate_n(n)
 
     # atleast_1d on BOTH sides. np.ascontiguousarray is documented ndmin=1, so it promotes
     # a 0-d array to (1,) before safetensors ever sees it — safetensors itself round-trips
@@ -129,21 +155,20 @@ def residual_ratio(
     # ratio stays finite and still measures absolute deviation in units of eps.
     scale = scale if scale > 0.0 else 1.0
 
-    length = cand.shape[-1] if n is None else n
-    if length < 1:
-        msg = f"n must be a positive accumulation length, got {length}"
-        raise ValueError(msg)
-    # sqrt(n), not n. Linear n is LAPACK's worst-case bound for *sequential*
-    # accumulation, where every rounding error is assumed to align. Every backend in
-    # this corpus reduces pairwise, and rounding errors of alternating sign random-walk
-    # rather than accumulate, so the realistic bound is statistical. Measured float32
-    # sum relative error: 8.3e-8 at n=64, 1.3e-7 at n=4096, 1.9e-7 at n=16384 — a 2.3x
-    # rise across a 256x rise in n, nowhere near the 256x that linear n budgets for.
-    # Over-normalizing is not a harmless safety margin: it raises the detection floor
-    # in step with n, and at n=4096 linear n let a softmax whose denominator was 0.3%
-    # wrong score 6.1 and pass, a bug the field-default allclose catches. A reference
-    # arm that loses to the baseline it exists to beat inverts the whole comparison.
-    return residual / (scale * eps * length**0.5)
+    length = cand.shape[-1] if given_n is None else given_n
+    # log2(n) — the error bound for *pairwise* summation, which is what every backend
+    # in this corpus actually does. The alternatives are bounds for other algorithms or
+    # for nothing at all: linear n is the worst case for *sequential* accumulation,
+    # where every rounding error is assumed to align, and sqrt(n) is a folk-statistical
+    # guess. Both over-normalize badly here. Measured drift of the correct-kernel ratio
+    # across n = 8 .. 16384 (float32 softmax against a float64 recompute, median of 60
+    # trials), where a good normalization is flat: log2 3.7x, sqrt 35x, linear n 1600x.
+    # Over-normalizing is not a harmless safety margin — it raises the detection floor
+    # in step with n, and under linear n a softmax whose denominator was 0.3% wrong
+    # scored 6.1 at n=4096 and passed, a bug the field-default allclose catches. A
+    # reference arm that loses to the baseline it exists to beat inverts the comparison
+    # it anchors. max(..., 1.0) keeps n=1 and n=2 from producing a zero divisor.
+    return residual / (scale * eps * max(float(np.log2(length)), 1.0))
 
 
 def within_threshold(ratio: float, thresh: float = DEFAULT_THRESH) -> bool:

@@ -69,12 +69,14 @@ def test_zero_reference_does_not_divide_by_zero():
 # --- the n normalization ----------------------------------------------------
 
 
-def test_ratio_normalizes_by_sqrt_of_the_accumulation_length():
-    """Pin the normalization law: sqrt(n), not n and not 1.
+def test_ratio_normalizes_by_log2_of_the_accumulation_length():
+    """Pin the normalization law: log2(n), not sqrt(n), not n, not 1.
 
-    This is the most consequential constant in the module — it sets the detection
-    floor, and a silent change to linear n would quadruple that floor at n=4096
-    without failing anything else in this file.
+    This is the most consequential decision in the module — it sets the detection
+    floor. log2 is the pairwise-summation bound, which is what the backends here
+    actually compute; the alternatives are the bound for sequential accumulation
+    (n), a folk-statistical guess (sqrt), and no normalization at all. All four
+    are pinned apart, so a silent change to any of them fails here.
     """
     # Exactly representable in float32, so the residual is exactly delta and the
     # absolute assertion below can be tight rather than approximate.
@@ -84,9 +86,21 @@ def test_ratio_normalizes_by_sqrt_of_the_accumulation_length():
     r_short = residual_ratio(short + delta, short)
     r_long = residual_ratio(long + delta, long)
     # Same residual, same scale: the ratios differ only by the normalization.
-    assert np.isclose(r_short / r_long, np.sqrt(4096 / 64), rtol=1e-9)
+    observed = r_short / r_long
+    assert np.isclose(observed, np.log2(4096) / np.log2(64), rtol=1e-9)
+    assert not np.isclose(observed, np.sqrt(4096 / 64), rtol=0.05)
+    assert not np.isclose(observed, 4096 / 64, rtol=0.05)
+    assert not np.isclose(observed, 1.0, rtol=0.05)
     # And the absolute value follows the stated formula.
-    assert np.isclose(r_short, delta / (EPS32 * np.sqrt(64)), rtol=1e-6)
+    assert np.isclose(r_short, delta / (EPS32 * np.log2(64)), rtol=1e-9)
+
+
+def test_short_accumulations_never_divide_by_zero():
+    # log2(1) is 0 and log2(2) is 1; the divisor floors at 1.0 for both.
+    x = np.ones((1,), dtype=np.float32)
+    delta = np.float32(2.0**-13)
+    assert np.isclose(residual_ratio(x + delta, x), float(delta) / EPS32, rtol=1e-6)
+    assert residual_ratio(x + delta, x, n=2) == residual_ratio(x + delta, x, n=1)
 
 
 def test_explicit_n_overrides_the_last_axis():
@@ -100,13 +114,50 @@ def test_explicit_n_overrides_the_last_axis():
     cand = sums + 1e-4
     default = residual_ratio(cand, sums)
     explicit = residual_ratio(cand, sums, n=4096)
-    assert np.isclose(default / explicit, np.sqrt(4096 / 8), rtol=1e-9)
+    assert np.isclose(default / explicit, np.log2(4096) / np.log2(8), rtol=1e-9)
+
+
+def test_default_n_still_depends_on_memory_layout():
+    """The layout asymmetry is reduced by log2, not removed.
+
+    Identical numerical error in the two layouts of the same data still differs
+    by log2(4096) = 12x under the default n. That is the reason `n` is explicit:
+    this test pins the residual exposure so it cannot silently widen again, and
+    documents that a caller relying on the default is choosing an axis.
+    """
+    delta = 2.0**-13
+    row = np.ones((1, 4096), dtype=np.float32)
+    col = np.ones((4096, 1), dtype=np.float32)
+    wide = residual_ratio(row + delta, row)
+    tall = residual_ratio(col + delta, col)
+    assert np.isclose(tall / wide, np.log2(4096), rtol=1e-9)
+    # Stating n makes the two layouts agree exactly.
+    assert residual_ratio(row + delta, row, n=4096) == residual_ratio(col + delta, col, n=4096)
 
 
 def test_non_positive_n_is_rejected():
     x = np.ones((4,), dtype=np.float32)
     with pytest.raises(ValueError, match="positive accumulation length"):
         residual_ratio(x, x, n=0)
+
+
+def test_non_integral_n_is_rejected():
+    # `int | None` is not enforced at runtime; n=2.5 would otherwise sail into
+    # the divisor and produce a plausible-looking ratio.
+    x = np.ones((4,), dtype=np.float32)
+    with pytest.raises(TypeError, match="integer accumulation length"):
+        residual_ratio(x, x, n=2.5)
+
+
+def test_bad_n_is_rejected_even_when_another_defect_would_short_circuit():
+    # Same bypass class as the dtype raise: every other exit yields inf or NaN,
+    # so a check that runs after them is unreachable on exactly the inputs where
+    # a caller most needs to hear about it.
+    with pytest.raises(ValueError, match="positive accumulation length"):
+        residual_ratio(np.ones((4,), dtype=np.float32), np.ones((3,), dtype=np.float32), n=0)
+    empty = np.zeros((0,), dtype=np.float32)
+    with pytest.raises(ValueError, match="positive accumulation length"):
+        residual_ratio(empty, empty, n=-5)
 
 
 # --- dtype handling ---------------------------------------------------------
@@ -211,17 +262,25 @@ def test_within_threshold_rejects_non_finite_ratios():
     assert not within_threshold(DEFAULT_THRESH)
 
 
-def test_threshold_is_bracketed_from_both_sides():
-    """Pin DEFAULT_THRESH itself, not just "well under it".
+def test_a_real_low_precision_bug_fails_at_a_long_reduction():
+    """Constrain DEFAULT_THRESH from below with a bug, not with a derivation.
 
-    The rounding tests below pass by ~1000x and would pass at THRESH=0.01, so
-    they constrain the constant only from above. These two perturbations sit
-    either side of the detection floor that 30.0 implies.
+    The margin tests below bound the constant from above only, and a floor
+    computed from DEFAULT_THRESH itself cannot bound it at all — both sides of
+    such a comparison move together, so it holds for any positive value. This
+    uses a real defect whose size comes from the hardware (a float16 accumulator
+    in an otherwise-float32 softmax over 4096 elements) and asserts it is caught.
+    Together with the margin tests, DEFAULT_THRESH is bracketed on both sides by
+    measurements rather than by tautology.
     """
-    ref = np.ones((64,), dtype=np.float32)
-    floor = DEFAULT_THRESH * EPS32 * np.sqrt(64)
-    assert residual_ratio(ref + np.float32(floor * 0.5), ref) < DEFAULT_THRESH
-    assert residual_ratio(ref + np.float32(floor * 2.0), ref) > DEFAULT_THRESH
+    n = 4096
+    x = np.random.default_rng(0).normal(size=(n,)).astype(np.float32)
+    shifted = (x - x.max()).astype(np.float32)
+    exp32 = np.exp(shifted)
+    reference = np.exp(shifted.astype(np.float64))
+    reference = reference / reference.sum()
+    buggy = exp32 / np.float32(exp32.astype(np.float16).sum(dtype=np.float16))
+    assert not within_threshold(residual_ratio(buggy, reference, dtype=np.float32))
 
 
 def test_correctly_rounded_float32_has_wide_margin():
