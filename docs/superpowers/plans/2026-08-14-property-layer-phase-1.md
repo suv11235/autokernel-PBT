@@ -1607,8 +1607,13 @@ def test_ratio(
     ``dtype`` selects the unit roundoff; it defaults to the candidate's dtype. Pass it
     explicitly when comparing a low-precision candidate promoted to float64.
     """
-    cand = np.asarray(candidate, dtype=np.float64)
-    ref = np.asarray(reference, dtype=np.float64)
+    # atleast_1d on BOTH sides. np.ascontiguousarray is documented ndmin=1, so it promotes
+    # a 0-d array to (1,) before safetensors ever sees it — safetensors itself round-trips
+    # shape [] faithfully. Since the execution table calls ascontiguousarray on every
+    # tensor, a reduction's persisted output is (1,) while its in-memory reference from
+    # np.sum is (). Normalizing only one side would return inf for every reduction case.
+    cand = np.atleast_1d(np.asarray(candidate, dtype=np.float64))
+    ref = np.atleast_1d(np.asarray(reference, dtype=np.float64))
     if cand.shape != ref.shape:
         return float("inf")
     if not np.all(np.isfinite(cand)) or not np.all(np.isfinite(ref)):
