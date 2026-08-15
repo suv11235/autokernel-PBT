@@ -1799,13 +1799,29 @@ class GroupProperty(Protocol):
     def check_group(self, rows: list[ExecutionResult]) -> PropertyResult: ...
 
 
-def _result(prop, verdict: Verdict, detail: str = "") -> PropertyResult:
+def _result(
+    prop,
+    verdict: Verdict,
+    detail: str = "",
+    *,
+    case_id: str = "",
+    group_id: str = "",
+) -> PropertyResult:
+    """Build a result, always attributing it to the case or group it judged.
+
+    Exactly one of case_id/group_id must be set: case properties set case_id, group
+    properties set group_id. A result with neither is orphaned — the association
+    cannot be recovered from a flat list, because HybridOracle concatenates arms and
+    the split point is not derivable.
+    """
     return PropertyResult(
         property_name=prop.name,
         tier=prop.tier,
         tolerance_free=prop.tolerance_free,
         verdict=verdict,
         detail=detail,
+        case_id=case_id,
+        group_id=group_id,
     )
 
 
@@ -2052,11 +2068,8 @@ from typing import Callable, Protocol, Sequence
 import numpy as np
 
 from autokernel_pbt.props.backends.base import ExecutionResult, kernel_inputs
-from autokernel_pbt.props.properties import (
-    TIER_PORTABLE,
-    CaseProperty,
-    GroupProperty,
-)
+from autokernel_pbt.props.properties import CaseProperty, GroupProperty
+from autokernel_pbt.props.verdict import TIER_PORTABLE
 from autokernel_pbt.props.tolerance import DEFAULT_THRESH, test_ratio, within_threshold
 from autokernel_pbt.props.verdict import PropertyResult, Verdict, summarize
 
@@ -2095,6 +2108,8 @@ class ReferenceOracle(_OracleBase):
         return results
 
     def _check_row(self, row: ExecutionResult) -> PropertyResult:
+        # case_id on every branch: without it the result is orphaned once HybridOracle
+        # concatenates arms, since the split point is not derivable from the flat list.
         if row.status != "ok" or "y" not in row.outputs:
             return PropertyResult(
                 property_name="matches_reference",
@@ -2102,6 +2117,7 @@ class ReferenceOracle(_OracleBase):
                 tolerance_free=False,
                 verdict=Verdict.INCONCLUSIVE,
                 detail=f"status={row.status}",
+                case_id=row.case.case_id,
             )
         expected = self.reference_fn(**kernel_inputs(row.case))
         got = row.outputs["y"]
@@ -2113,6 +2129,7 @@ class ReferenceOracle(_OracleBase):
             tolerance_free=False,
             verdict=Verdict.PASS if ok else Verdict.FAIL,
             detail=f"ratio={ratio:.3g} thresh={self.thresh}",
+            case_id=row.case.case_id,
         )
 
 
