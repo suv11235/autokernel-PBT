@@ -44,7 +44,7 @@ PERSISTABLE_KINDS = "biuf"
 
 class Status(str, Enum):
     """Execution outcome. A `str` subclass, so it lands in Parquet and JSON as
-    its wire value and compares equal to it, while a typo is a `AttributeError`
+    its wire value and compares equal to it, while a typo is an `AttributeError`
     at import rather than a comparison that silently never matches.
     """
 
@@ -55,6 +55,15 @@ class Status(str, Enum):
     COMPILE_ERROR = "compile_error"
     TIMEOUT = "timeout"
 
+    # Without these, `str()` and `format()` of a str-mixin Enum return the wire
+    # value on 3.10/3.11 but the repr-style name ("Status.OK") on 3.12+ — so
+    # `f"status={row.status}"` would render differently across the range this
+    # project declares support for (requires-python = ">=3.10"). Task 9 puts
+    # exactly that interpolation in a human-readable detail field.
+    # `enum.StrEnum` does this natively but is 3.11+, so it is unavailable here.
+    __str__ = str.__str__
+    __format__ = str.__format__
+
 
 @dataclass
 class ExecutionResult:
@@ -63,7 +72,7 @@ class ExecutionResult:
     case: Case
     outputs: dict[str, np.ndarray] = field(default_factory=dict)
     telemetry: dict[str, Any] = field(default_factory=dict)
-    status: str = Status.OK
+    status: Status = Status.OK
     error: str = ""
 
 

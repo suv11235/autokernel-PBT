@@ -350,3 +350,27 @@ def test_status_survives_json_and_reconstruction():
 
     assert json.dumps({"status": Status.OK}) == '{"status": "ok"}'
     assert Status("launch_error") is Status.LAUNCH_ERROR
+
+
+def test_status_renders_as_its_wire_value_not_its_name():
+    """A bare str-mixin Enum renders as the value on 3.10/3.11 and as
+    "Status.OK" on 3.12+, so the same detail string would differ across the
+    range `requires-python = ">=3.10"` declares. Pinned by the explicit
+    `__str__`/`__format__` on `Status`.
+    """
+    assert str(Status.OK) == "ok"
+    assert f"{Status.OK}" == "ok"
+    assert "{}".format(Status.OK) == "ok"  # noqa: UP032 - format() is under test
+    assert f"status={Status.LAUNCH_ERROR}" == "status=launch_error"
+
+
+def test_status_column_round_trips_through_parquet(tmp_path):
+    """The wire value is what Task 7 writes and Task 9 reads back."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    path = tmp_path / "rows.parquet"
+    pq.write_table(pa.Table.from_pylist([{"status": Status.OK}]), path)
+    value = pq.read_table(path).to_pylist()[0]["status"]
+    assert value == "ok"
+    assert Status(value) is Status.OK
