@@ -1,6 +1,7 @@
 """ExecutionTable round-trip tests."""
 
 import numpy as np
+import pytest
 
 from autokernel_pbt.props.backends.base import ExecutionResult, Status
 from autokernel_pbt.props.case import Case
@@ -21,8 +22,27 @@ def _result(case_id: str, group_id: str = "g0", relation: str = "base") -> Execu
         case=case,
         outputs={"y": np.full((2, 3), 0.25, dtype=np.float32)},
         telemetry={"backend": "numpy", "wall_ms": 1.5},
-        status="ok",
+        status=Status.OK,
     )
+
+
+def _tagged(case_id: str, tag: float) -> ExecutionResult:
+    """A row whose tensor value and telemetry carry the same tag.
+
+    Any row read back with `outputs["y"] != telemetry["wall_ms"]` is a payload
+    paired with metadata from a different write — the torn-table failure.
+    """
+    result = _result(case_id)
+    result.outputs = {"y": np.full((2, 3), tag, dtype=np.float32)}
+    result.telemetry = {"backend": "numpy", "wall_ms": tag}
+    return result
+
+
+def _observed(run_dir) -> list[tuple[str, float, float]]:
+    return [
+        (r.case.case_id, float(r.outputs["y"][0, 0]), r.telemetry["wall_ms"])
+        for r in ExecutionTable(run_dir).read()
+    ]
 
 
 def _assert_identical(actual: np.ndarray, expected: np.ndarray) -> None:
@@ -147,6 +167,24 @@ def test_output_error_row_round_trips_with_empty_outputs(tmp_path):
     _assert_identical(row.case.tensors["x"], np.full((2, 3), 0.5, dtype=np.float32))
 
 
+def test_none_error_round_trips_as_empty_string(tmp_path):
+    """`ExecutionResult.error` is declared `str = ""`; the table must not widen it."""
+    result = _result("c0")
+    result.error = None
+    ExecutionTable(tmp_path / "run1").write([result])
+    assert ExecutionTable(tmp_path / "run1").read()[0].error == ""
+
+
+def test_unknown_status_names_the_run_directory(tmp_path):
+    """A stale table must say *which* run is stale, not just that a value is bad."""
+    run = tmp_path / "run1"
+    result = _result("c0")
+    result.status = "oom_error"  # a member some future phase adds
+    ExecutionTable(run).write([result])
+    with pytest.raises(ValueError, match="rows.parquet"):
+        ExecutionTable(run).read()
+
+
 def test_read_on_missing_run_returns_empty(tmp_path):
     assert ExecutionTable(tmp_path / "nope").read() == []
 
@@ -198,6 +236,42 @@ def test_zero_dim_input_tensor_keeps_its_shape(tmp_path):
     assert row.case.shape == ()
     assert row.case.tensors["x"].shape == ()
     _assert_identical(row.case.tensors["x"], np.array(0.5, dtype=np.float32))
+
+
+def test_empty_shaped_tensor_round_trips(tmp_path):
+    """A `(0,)` tensor has a shape but no bytes; both must survive."""
+    case = Case(
+        case_id="c0",
+        group_id="g0",
+        relation="base",
+        task_id="t",
+        dtype="float32",
+        shape=(0,),
+        tensors={"x": np.zeros((0,), dtype=np.float32)},
+    )
+    outputs = {"y": np.zeros((0, 3), dtype=np.float32)}
+    ExecutionTable(tmp_path / "run1").write([ExecutionResult(case=case, outputs=outputs)])
+    row = ExecutionTable(tmp_path / "run1").read()[0]
+    assert row.case.shape == (0,)
+    _assert_identical(row.case.tensors["x"], np.zeros((0,), dtype=np.float32))
+    _assert_identical(row.outputs["y"], np.zeros((0, 3), dtype=np.float32))
+
+
+def test_case_with_no_tensors_round_trips(tmp_path):
+    """An empty safetensors payload keeps `read()` free of a per-row existence check."""
+    case = Case(
+        case_id="c0",
+        group_id="g0",
+        relation="base",
+        task_id="t",
+        dtype="float32",
+        shape=(2, 3),
+        tensors={},
+    )
+    ExecutionTable(tmp_path / "run1").write([ExecutionResult(case=case)])
+    row = ExecutionTable(tmp_path / "run1").read()[0]
+    assert row.case.tensors == {}
+    assert row.outputs == {}
 
 
 def test_non_contiguous_input_tensor_round_trips(tmp_path):
@@ -323,6 +397,99 @@ def test_rewrite_does_not_resurrect_rows_from_the_previous_write(tmp_path):
     table.write([_result("c0"), _result("c1")])
     table.write([_result("c1")])
     assert [r.case.case_id for r in ExecutionTable(tmp_path / "run1").read()] == ["c1"]
+
+
+# --- Atomicity: the index and the payload set are never observed out of step ---
+
+
+def test_torn_rewrite_never_pairs_old_metadata_with_new_tensors(tmp_path):
+    """A rewrite that fails midway must not leave a readable mixture.
+
+    Reusing case_ids across writes of the same run is the normal case — a
+    re-run, a resume — so a payload overwritten before the index is republished
+    would pair v2 tensor bytes with v1 telemetry and `read()` would report it
+    without raising. That is worse than a loud failure: every oracle scored
+    against such a table is scored against an execution that never happened.
+    """
+    run = tmp_path / "run1"
+    ExecutionTable(run).write([_tagged("c0", 1.0), _tagged("c1", 1.0)])
+    assert _observed(run) == [("c0", 1.0, 1.0), ("c1", 1.0, 1.0)]
+
+    doomed = _tagged("c1", 2.0)
+    # An object-dtype array is genuinely unpersistable: safetensors rejects it,
+    # so the second iteration of the write loop raises after the first has
+    # already written its payload under a reused case_id.
+    doomed.outputs = {"y": np.array([object()], dtype=object)}
+    with pytest.raises(Exception):  # noqa: B017 - SafetensorError is not public
+        ExecutionTable(run).write([_tagged("c0", 2.0), doomed])
+
+    assert _observed(run) in ([], [("c0", 1.0, 1.0), ("c1", 1.0, 1.0)])
+
+
+def test_failed_write_leaves_no_orphan_payloads_behind(tmp_path):
+    run = tmp_path / "run1"
+    ExecutionTable(run).write([_result("c0"), _result("c1")])
+    ExecutionTable(run).write([_result("c0")])
+    payloads = {p.name for p in (run / "tensors").iterdir()}
+    assert payloads == {"c0.safetensors"}
+
+
+def test_duplicate_case_ids_in_one_write_are_rejected(tmp_path):
+    """Two rows sharing a payload file is the torn table again, with no crash."""
+    run = tmp_path / "run1"
+    ExecutionTable(run).write([_tagged("c0", 1.0)])
+    with pytest.raises(ValueError, match="duplicate case_ids"):
+        ExecutionTable(run).write([_tagged("c1", 2.0), _tagged("c1", 3.0)])
+    # Rejected before any payload was touched, so the old table is intact.
+    assert _observed(run) == [("c0", 1.0, 1.0)]
+
+
+def test_write_leaves_no_temporary_files_in_the_run_dir(tmp_path):
+    run = tmp_path / "run1"
+    ExecutionTable(run).write([_result("c0")])
+    assert {p.name for p in run.iterdir()} == {"rows.parquet", "tensors"}
+
+
+# --- Telemetry serialization gate ---
+
+
+def test_numpy_scalar_telemetry_round_trips(tmp_path):
+    """A device backend reporting a counter as a numpy scalar must not abort the run.
+
+    `np.float64` subclasses `float` and would have slipped through, but
+    `np.float32`, `np.int64` and `np.bool_` do not — and the failure would fire
+    after the tensor loop had already overwritten payloads.
+    """
+    result = _result("c0")
+    result.telemetry = {
+        "backend": "cuda",
+        "wall_ms": np.float32(1.5),
+        "sm_occupancy": np.int64(7),
+        "spilled": np.bool_(True),
+        "per_warp": np.arange(3, dtype=np.int64),
+    }
+    ExecutionTable(tmp_path / "run1").write([result])
+    telemetry = ExecutionTable(tmp_path / "run1").read()[0].telemetry
+    assert telemetry == {
+        "backend": "cuda",
+        "wall_ms": 1.5,
+        "sm_occupancy": 7,
+        "spilled": True,
+        "per_warp": [0, 1, 2],
+    }
+
+
+def test_unserializable_telemetry_fails_loudly_and_preserves_the_old_table(tmp_path):
+    """The gate runs before any payload is touched, so the old table survives."""
+    run = tmp_path / "run1"
+    ExecutionTable(run).write([_tagged("c0", 1.0)])
+
+    doomed = _tagged("c0", 2.0)
+    doomed.telemetry = {"backend": "numpy", "wall_ms": {1, 2}}
+    with pytest.raises(TypeError, match="not JSON-serializable"):
+        ExecutionTable(run).write([doomed])
+
+    assert _observed(run) == [("c0", 1.0, 1.0)]
 
 
 # --- Requirement G: case_id becomes a filename ---

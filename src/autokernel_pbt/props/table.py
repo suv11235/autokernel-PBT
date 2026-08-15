@@ -16,6 +16,19 @@ Layout::
     <run_dir>/rows.parquet          one row per execution, tensor-free
     <run_dir>/tensors/<case_id>.safetensors
 
+INVARIANT: the Parquet index and the payload set are never observed out of
+step. `rows.parquet` is the index — `read()` opens only the payloads it names —
+so `write()` retires the index *first* and republishes it last, atomically.
+Every observable state is therefore either a complete table or an absent one.
+See `write()` for why a torn table is worse than a lost one.
+
+FIDELITY: tensors round-trip bitwise; `telemetry` does not, and cannot. It is
+JSON-encoded, and JSON has no tuple and no non-string key, so `(1, 2)` returns
+as `[1, 2]` and `{0: "sm"}` as `{"0": "sm"}`. Numpy scalars and arrays are
+coerced to their Python equivalents on write (see `_json_safe`). Telemetry is
+counters and labels, where this is harmless; anything needing byte fidelity is
+a tensor and belongs in the payload.
+
 PORTABILITY: `case_id` is used verbatim as a filename, and relation-derived ids
 contain `::` (see `relations._derived`). That is fine on macOS and Linux, which
 is what this project targets, but `::` is not a legal filename character on
@@ -26,8 +39,11 @@ codebase depends on the filename being the raw id.
 from __future__ import annotations
 
 import json
-from collections import OrderedDict
+import os
+import shutil
+from collections import Counter
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pyarrow as pa
@@ -39,6 +55,8 @@ from autokernel_pbt.props.case import Case
 
 METADATA_FILE = "rows.parquet"
 TENSOR_DIR = "tensors"
+# Staged inside run_dir so the final publish is a same-filesystem rename.
+METADATA_TMP = f".{METADATA_FILE}.tmp"
 
 # Inputs and outputs share one safetensors file per row, so they need
 # disambiguating prefixes. The separator is `.`, which cannot appear at the
@@ -86,6 +104,28 @@ def _persistable(array: np.ndarray) -> np.ndarray:
     return np.ascontiguousarray(array).reshape(array.shape)
 
 
+def _json_safe(obj: Any) -> Any:
+    """Coerce a numpy telemetry value to its Python equivalent, or fail loudly.
+
+    `base.py` gates output *dtypes* at the execution boundary precisely because
+    an unpersistable value would "take the entire run's persistence with it".
+    Telemetry needs the same gate one field over: a Phase 3 backend reporting a
+    counter read from a device query gets an `np.int64`, and `json.dumps` raises
+    on it. `np.float64` slips through unaided because it subclasses `float`,
+    which makes the gap easy to miss — `np.float32`, `np.int64` and `np.bool_`
+    do not.
+
+    Anything genuinely unrepresentable still raises, before any payload has been
+    touched, so the run's existing table survives intact.
+    """
+    if isinstance(obj, np.generic):
+        return obj.item()
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    msg = f"telemetry value is not JSON-serializable: {obj!r}"
+    raise TypeError(msg)
+
+
 class ExecutionTable:
     """Read/write the recorded executions for one run."""
 
@@ -100,9 +140,48 @@ class ExecutionTable:
         return self.run_dir / TENSOR_DIR / f"{case_id}.safetensors"
 
     def write(self, results: list[ExecutionResult]) -> None:
-        """Persist every result, replacing any table already in `run_dir`."""
-        (self.run_dir / TENSOR_DIR).mkdir(parents=True, exist_ok=True)
-        records = []
+        """Persist every result, replacing any table already in `run_dir`.
+
+        Ordered so that a crash can lose the table but can never tear it.
+
+        Writing payloads in a loop and the index once at the end looks safe, and
+        is — unless the run already has a table and the write reuses case_ids,
+        which is the normal case for a re-run or a resume. Then a crash midway
+        leaves v2 tensor bytes under v1 metadata, and `read()` reports it
+        without raising: telemetry from one execution paired with the tensors of
+        another. Every oracle scored against such a table is scored against an
+        execution that never happened, and nothing anywhere says so. A table
+        that is merely *gone* is recoverable by re-running; a table that reads
+        clean and lies is not.
+
+        So: encode the metadata first (pure, and the only step that inspects
+        caller-supplied telemetry, so a bad value aborts before anything on disk
+        is touched), then retire the index, then rebuild the payloads — which
+        are unreferenced from that moment, so clearing the directory outright is
+        safe and reclaims any orphans from a previous longer write — then
+        publish the new index with a single atomic rename.
+        """
+        # Same failure mode as a torn rewrite, reachable with no crash at all:
+        # case_id is the payload filename, so two rows sharing one would write
+        # two sets of tensors to a single file and both read back the survivor's
+        # bytes under their own metadata. `CaseGroup` enforces uniqueness within
+        # a group but nothing does across a batch, so the ledger checks it.
+        counts = Counter(result.case.case_id for result in results)
+        duplicates = sorted(case_id for case_id, n in counts.items() if n > 1)
+        if duplicates:
+            msg = f"duplicate case_ids in one write, which would share a payload: {duplicates}"
+            raise ValueError(msg)
+
+        records = [self._record(result) for result in results]
+        table = pa.Table.from_pylist(records, schema=SCHEMA)
+
+        self.run_dir.mkdir(parents=True, exist_ok=True)
+        # From here until the rename below, this run observably has no table.
+        self.metadata_path.unlink(missing_ok=True)
+        tensor_dir = self.run_dir / TENSOR_DIR
+        shutil.rmtree(tensor_dir, ignore_errors=True)
+        tensor_dir.mkdir(parents=True)
+
         for result in results:
             payload: dict[str, np.ndarray] = {}
             for name, array in result.case.tensors.items():
@@ -112,17 +191,35 @@ class ExecutionTable:
             # A failed row has no outputs at all; safetensors accepts an empty
             # payload, which keeps read() free of a per-row existence check.
             save_file(payload, str(self._tensor_path(result.case.case_id)))
-            record = result.case.metadata()
-            record["shape"] = json.dumps(record["shape"])
-            record["telemetry"] = json.dumps(result.telemetry)
-            # `Status` is a str subclass, so pyarrow stores the wire value.
-            record["status"] = str(result.status)
-            record["error"] = result.error
-            records.append(record)
-        pq.write_table(pa.Table.from_pylist(records, schema=SCHEMA), self.metadata_path)
+
+        staged = self.run_dir / METADATA_TMP
+        try:
+            pq.write_table(table, staged)
+            # The publish. os.replace is atomic within a filesystem, and `staged`
+            # is a sibling, so no reader ever sees a partial index.
+            os.replace(staged, self.metadata_path)
+        finally:
+            staged.unlink(missing_ok=True)
+
+    def _record(self, result: ExecutionResult) -> dict[str, Any]:
+        record = result.case.metadata()
+        record["shape"] = json.dumps(record["shape"])
+        record["telemetry"] = json.dumps(result.telemetry, default=_json_safe)
+        # `Status` is a str subclass, so pyarrow stores the wire value.
+        record["status"] = str(result.status)
+        # `ExecutionResult.error` is declared `str = ""`; a None from a caller
+        # that skipped the default must not widen the column's contract.
+        record["error"] = result.error or ""
+        return record
 
     def read(self) -> list[ExecutionResult]:
-        """Every recorded execution, in write order. `[]` if the run is absent."""
+        """Every recorded execution, in write order. `[]` if the run is absent.
+
+        A status value with no `Status` member raises rather than degrading to a
+        string or a placeholder. That is deliberate: it means a table written by
+        a build whose status vocabulary has since changed, which every oracle
+        downstream would otherwise silently misclassify.
+        """
         if not self.metadata_path.exists():
             return []
         results = []
@@ -157,15 +254,24 @@ class ExecutionTable:
                     # and any identity-based dispatch would silently never
                     # match. Reconstruct the member so a replayed row is
                     # indistinguishable from a freshly executed one.
-                    status=Status(record["status"]),
+                    status=self._status(record["status"], record["case_id"]),
                     error=record["error"],
                 )
             )
         return results
 
-    def read_groups(self) -> OrderedDict[str, list[ExecutionResult]]:
+    def _status(self, value: str, case_id: str) -> Status:
+        try:
+            return Status(value)
+        except ValueError as exc:
+            # A bare "'oom_error' is not a valid Status" from deep inside a read
+            # gives no clue which run directory is stale.
+            msg = f"{exc} (case {case_id!r} in {self.metadata_path})"
+            raise ValueError(msg) from exc
+
+    def read_groups(self) -> dict[str, list[ExecutionResult]]:
         """Rows reassembled into case groups, preserving write order."""
-        groups: OrderedDict[str, list[ExecutionResult]] = OrderedDict()
+        groups: dict[str, list[ExecutionResult]] = {}
         for row in self.read():
             groups.setdefault(row.case.group_id, []).append(row)
         return groups
