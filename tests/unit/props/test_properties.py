@@ -255,6 +255,33 @@ def test_values_in_unit_interval_rejects_a_one_ulp_excursion(outside):
     assert ValuesInUnitInterval().check(_row(X, y)).verdict is Verdict.FAIL
 
 
+@pytest.mark.parametrize(
+    "outside",
+    [
+        np.nextafter(np.float32(1.0), np.float32(2.0)),
+        np.nextafter(np.float32(0.0), np.float32(-1.0)),
+    ],
+)
+def test_boundary_violation_detail_is_legible_at_one_ulp(outside):
+    """The reported bounds must be distinguishable from the interval they violate.
+
+    A rounded format renders a one-ulp overshoot as "range [1, 1] outside [0, 1]",
+    which tells a human staring at the boundary case nothing at all. `detail` is
+    read by people during triage and parsed by nothing, so full round-trip precision
+    is the only thing it owes them. Asserted because a reformat would silently undo it.
+    """
+    y = _softmax(X).copy()
+    y[0, 0] = outside
+    detail = ValuesInUnitInterval().check(_row(X, y)).detail
+
+    reported, _, interval = detail.partition(" outside ")
+    assert interval == "[0, 1]"
+    assert reported != f"range {interval}", "bounds rendered indistinguishably from the interval"
+    assert repr(outside) in reported
+    # The offending value survives the round trip through the message.
+    assert np.float32(repr(outside).split("(")[-1].rstrip(")")) == outside
+
+
 def test_values_in_unit_interval_is_inconclusive_on_non_finite_output():
     # Reporting NaN here as well as in OutputsAreFinite would count one defect twice.
     bad = _softmax(X).copy()

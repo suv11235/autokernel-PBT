@@ -217,11 +217,17 @@ class ValuesInUnitInterval:
             return _result(self, Verdict.INCONCLUSIVE, reason, case_id=case_id)
         if not np.all(np.isfinite(y)):
             return _result(self, Verdict.INCONCLUSIVE, _NONFINITE_DETAIL, case_id=case_id)
-        low, high = float(np.min(y)), float(np.max(y))
+        # Kept as numpy scalars, and rendered with !r rather than a fixed precision.
+        # The bound is exact, so the interesting failures are one-ulp overshoots — and
+        # those are precisely the ones a rounded format erases, reporting the useless
+        # "range [1, 1] outside [0, 1]" for the case a human most needs to read. repr
+        # round-trips and carries the dtype, so it stays honest for float16 too, which
+        # a float64-shaped .17g would over-print.
+        low, high = np.min(y), np.max(y)
         if low < 0.0 or high > 1.0:
-            detail = f"range [{low:.6g}, {high:.6g}] outside [0, 1]"
+            detail = f"range [{low!r}, {high!r}] outside [0, 1]"
             return _result(self, Verdict.FAIL, detail, case_id=case_id)
-        return _result(self, Verdict.PASS, f"range=[{low:.6g}, {high:.6g}]", case_id=case_id)
+        return _result(self, Verdict.PASS, f"range=[{low!r}, {high!r}]", case_id=case_id)
 
 
 class RowsSumToOne:
