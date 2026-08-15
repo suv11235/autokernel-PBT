@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import Enum
 
@@ -58,7 +58,7 @@ class PropertyResult:
             raise ValueError(msg)
 
 
-def summarize(results: Sequence[PropertyResult]) -> Verdict:
+def summarize(results: Iterable[PropertyResult]) -> Verdict:
     """Combine multiple property verdicts into a single test outcome.
 
     Precedence (strict order):
@@ -68,7 +68,7 @@ def summarize(results: Sequence[PropertyResult]) -> Verdict:
        checked nothing has not established correctness.
     3. All other cases (only PASS verdicts) return PASS.
 
-    Accepts any Sequence to support both lists and other sequences;
+    Accepts any Iterable (including generators, which are not Sequences);
     converts to list internally to allow multiple iterations.
     """
     # Convert to list to allow multiple iterations (needed for two any() calls)
