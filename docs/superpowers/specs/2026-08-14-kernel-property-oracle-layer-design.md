@@ -1,0 +1,319 @@
+# Design: Kernel property/oracle layer
+
+**Date:** 2026-08-14
+**Status:** Approved (design); implementation plan pending
+**Scope:** First slice of the autokernel-PBT project — the property and oracle layer. Kernel
+generation, translation, and any search loop are downstream consumers and are out of scope here.
+
+---
+
+## 1. Problem
+
+A compute kernel is not self-describing. Before any generated or translated kernel can be judged,
+something must decide whether an execution was correct. That decision procedure is the **oracle**.
+
+Today the field's default oracle is `torch.allclose(candidate, reference)` against a PyTorch eager
+implementation. That choice is rarely examined, and it has two known failure modes:
+
+1. It encodes the reference's reduction order and an arbitrary per-dtype tolerance as if they were
+   specification.
+2. In low-precision, long-reduction regimes it is close to informationless — the classical
+   `γ_n ≈ n·u` error bound is vacuous for bf16 at K≥1024.
+
+The alternative — many individually-weak declarative properties (algebraic laws, metamorphic
+relations) — is cheap to state but of unknown power. Nobody has measured the trade for kernels.
+
+## 2. Research framing
+
+> **Which oracle strategy, at what cost, catches which fault classes — measured over identical
+> replayed executions, across three backends, with tolerance-free and tolerance-dependent
+> detection reported separately.**
+
+This framing was chosen deliberately over the more obvious "properties beat reference outputs,"
+which is now settled literature (see `reference/PBT-property-based-testing/NOTES.md` §7.1).
+
+Three oracle strategies form a spectrum from one strong property to many weak ones:
+
+| Arm | Properties | Character |
+|-----|-----------|-----------|
+| **Reference** | One: `output ≈ reference(input)` | Maximally strong, maximally brittle |
+| **Declarative** | Many algebraic/metamorphic laws | Individually weak, jointly constraining |
+| **Hybrid** | Composition with precedence | Laws as filter, reference where trustworthy |
+
+**Prior art that must be cited rather than claimed** (all established as of mid-2026): reference
+oracle inadequacy; declarative kernel contracts as a concept; LLM-authored properties; and
+"hybrid beats either" on non-numeric code. What remains open: oracle strategy as a controlled
+independent variable scored by fault detection; byte-identical replayed executions; cross-backend
+portability including NKI; and cost-per-bug.
+
+**A published result points the other way and must be addressed head-on.** Hughes'
+*How to Specify It!* found the model-based oracle (our reference arm) caught all 8 planted bugs
+roughly 10× faster than metamorphic properties. His stated escape clauses — use metamorphic when
+the model is expensive or replicates the implementation's bugs — are exactly the kernel situation,
+and that is the argument this project must make empirically rather than assert.
+
+## 3. Architecture
+
+### 3.1 Batch-first record/replay
+
+The property-based testing loop (generate → execute → check) is normally one tight function. Here
+it is **split into three stages**:
+
+```
+Phase A  Generate    seeded case set, deterministic, serializable
+Phase B  Execute     whole batch on one backend, one job, persist every row
+Phase C  Check       oracles evaluated OFFLINE over the recorded table
+Phase D  Shrink      on failure only, re-executes reduced inputs
+```
+
+Two properties follow, and they are the reason for the design:
+
+- **Fair comparison by construction.** One hardware run replays through all three oracle
+  strategies over identical inputs. If oracle choice influenced generation, the comparison would
+  confound generation with checking and the headline claim would be unfalsifiable.
+- **Hardware runs become reusable datasets.** A fourth oracle can be scored months later without
+  touching a device. This matters because hardware is non-persistent cloud, not local.
+
+The cost is losing adaptive generation and free shrinking. Shrinking becomes an explicit Phase D.
+
+### 3.2 The execution row
+
+```
+ExecutionRow
+  case_id
+  group_id          ← case-group identity (§3.3)
+  task_id, backend, dtype, shape
+  inputs            ← tensor payload reference
+  outputs           ← tensor payload reference
+  telemetry         ← §3.4
+  status            ← ok | compile_error | launch_error | timeout
+```
+
+**Storage is split.** Tensor payloads go to **safetensors** (zero-copy, dtype-faithful,
+framework-neutral); execution-row metadata goes to **Parquet** (columnar, and the analysis is
+column-oriented aggregation over many rows). The existing JSONL run ledger is retained for
+run-level records only. Tensor data is far too large for the JSON ledger the current skeleton
+uses.
+
+### 3.3 Case groups
+
+Metamorphic properties need a *second* execution of the same kernel on a transformed input —
+softmax shift invariance needs both `X` and `X + c`. Therefore:
+
+- The generator emits **case groups**: related inputs sharing a `group_id` and a relation tag.
+- Groups also cover execution-parameter variation (split-K, dtype ladders), not just input
+  transforms.
+- The batch and the table must preserve group identity end to end.
+
+If rows were modelled as flat and independent, roughly half the declarative arm would be
+unimplementable. This is the single most important structural requirement.
+
+### 3.4 Property tiers and telemetry
+
+**Tier 1 — portable/semantic.** Hold for any correct implementation on any backend. Pure
+functions of `(inputs, outputs)`. These are the cross-backend equivalence contract used by the
+translation workstream.
+
+**Tier 2 — backend-specific.** Encode stack idiosyncrasies: CUDA OOB/race/launch-bound/register
+spill; Triton block-size and mask constraints; NKI tile, SBUF/PSUM capacity and layout limits.
+
+**Most tier-2 properties are not functions of `(inputs, outputs)`.** They need side-channel data —
+sanitizer output, compiler diagnostics, occupancy, register counts. That must be captured *during*
+Phase B, on the device, in the same job. It cannot be recovered offline, and re-running a Trainium
+job to add a missing counter is precisely the cost this architecture exists to avoid.
+
+Known constraint: `compute-sanitizer`'s `racecheck` detects only shared-memory races; no subtool
+detects global-memory races; the four tools do not compose (4× budget); output is XML only.
+
+### 3.5 Per-property attribution and the tolerance-free tag
+
+Every property verdict is recorded individually, not collapsed into pass/fail. Each property
+carries:
+
+- `tier` — 1 or 2
+- `tolerance_free` — whether the check needs a numerical tolerance argument at all
+
+Attribution answers whether ten properties are pulling their weight or one is doing all the work.
+The tolerance-free tag supports what may be the sharpest defensible claim: **not "more bugs," but
+"bugs found without a tolerance argument."** About a third of the catalogue qualifies — causal-mask
+locality, batch-axis independence, order preservation, exact zeros, convex-hull bounds.
+
+### 3.6 Three-valued verdicts
+
+Oracles return **pass / fail / inconclusive**. The third value is mandatory: "the reference itself
+overflowed" or "no tolerance is defined for this fp8 case" must not count as a caught bug, or the
+false-positive metric is meaningless.
+
+## 4. Component design
+
+| Component | Responsibility | Depends on |
+|-----------|---------------|------------|
+| `InputDomain` | Serializable, seeded description of a task's input space | — |
+| `Generator` | `InputDomain` → deterministic case set with groups | `InputDomain` |
+| `Backend` | Compile + launch on one target; emit outputs and telemetry | — |
+| `ExecutionTable` | Persist/load rows; split tensor and metadata storage | — |
+| `Property` | One predicate over rows/groups; tagged tier + tolerance_free | `ExecutionTable` |
+| `Oracle` | A property set plus composition policy; three-valued verdict | `Property` |
+| `Shrinker` | Domain-specific reduction of a failing case | `Backend`, `Oracle` |
+| `MutationCorpus` | Deliberately-broken kernels with ground truth | `Backend` |
+| `ExperimentRunner` | Vary oracle, hold executions fixed; emit metrics | all |
+
+Each is independently testable on CPU. `Backend` is the only component that needs a device, and it
+is behind an interface with a CPU/NumPy implementation as a first-class member.
+
+## 5. Key decisions
+
+### 5.1 Language: Python 3.11+
+
+Decided by ecosystem, not preference: Triton and NKI are both Python DSLs, PyTorch references are
+Python, KernelBench is Python. Kernel *source* stays backend-native (CUDA C++ via
+`torch.utils.cpp_extension`); the harness treats a kernel as an artifact plus a compile/launch
+adapter.
+
+Declarative specs are a **Python eDSL, not YAML** — properties must compute (permutations,
+shape-dependent anchors, tolerances). Their law list serializes into the ledger for attribution.
+
+### 5.2 Hypothesis: strategy library, not driver
+
+**Use `hypothesis.extra.numpy` / `extra.array_api` as generators; write a thin custom batch
+driver; do not use `@given` as the driver.**
+
+Reasons:
+- `@given` interleaves generation with evaluation, so two oracle strategies would see different
+  inputs — the exact confound the architecture exists to remove.
+- Hypothesis's shrinker reduces the internal choice sequence and **re-runs the generator and the
+  property**, which for us means re-executing on hardware. It cannot work offline.
+- Reproducibility is weaker than needed: `derandomize` holds only until Hypothesis or Python is
+  upgraded; `@reproduce_failure` makes no cross-version guarantee; undocumented internals may
+  break in patch releases. A Hypothesis corpus is reproducible-by-artifact, not by seed.
+
+But its float edge-case tuning (subnormals, ±0.0, exponent boundaries) is a decade of work and is
+where bugs live. So: **harvest a corpus once** via the supported `@given(phases=[Phase.generate])`
+route, materialize and hash it. Keep a live Hypothesis loop for Phase D minimization only, where
+`hypothesis.target()` steering on relative error is a cheap win.
+
+Case groups are something Hypothesis has no notion of and we must own regardless, which makes the
+marginal cost of owning the driver small.
+
+### 5.3 The reference arm uses test ratios, not `allclose`
+
+LAPACK-style normalized residuals — e.g. `‖b−Ax‖/(‖A‖‖x‖ε)` — with a single dimensionless
+threshold across every routine, size and precision (LAWN 41 §7.1.1 uses `THRESH = 30.0`).
+
+This makes the reference arm a *strong* baseline rather than a strawman, which the comparison's
+credibility depends on. Nobody in the kernel literature currently does this.
+
+Tolerance derivation, not guessing: the classical `γ_n ≈ n·u` bound is vacuous for bf16 at large
+K; Higham & Mary give `√(n log n)·u`, sharpening toward `O(u)` for zero-mean data — so **the
+correct tolerance depends on the generator's distribution, not just the dtype**. Separately,
+NVIDIA tensor cores accumulate in round-toward-zero, a systematic non-cancelling bias that breaks
+any √n-calibrated tolerance.
+
+### 5.4 Generator defaults are shape/dtype/backend, not adversarial values
+
+Evidence: boundary shape sampling gives 78% recall at 0% false positives; adversarial NaN/Inf
+value injection gives 99% recall at 94% FP. Corroborated by an ISSTA 2026 study of 301 real
+Triton/TileLang bugs, which are tightly coupled to shapes, dtypes and backend targets.
+
+Adversarial value families remain available but are opt-in per task, never the default.
+
+## 5.5 Implementation phasing
+
+This design is deliberately larger than one implementation plan. It decomposes into three
+sub-projects, each of which gets its own plan and can be built and validated independently:
+
+**Phase 1 — Core loop on CPU.** `InputDomain`, `Generator` with case groups, `ExecutionTable`,
+CPU/NumPy `Backend`, `Property`, `Oracle` with three-valued verdicts, tier-1 properties for the
+elementwise→reduction ladder. Fully testable with no hardware. Delivers: a working record/replay
+pipeline and the reference and declarative arms on CPU.
+
+**Phase 2 — Measurement.** `MutationCorpus`, `ExperimentRunner`, the four metrics, the shrinker.
+This is the phase that produces the paper's numbers. Still CPU-only.
+
+**Phase 3 — Device backends and tier 2.** CUDA/Triton backend, telemetry capture, tier-2
+properties, then NKI. Introduces the batch-job boundary and the only components requiring hardware.
+
+Phase 1 is the subject of the first implementation plan. Phases 2 and 3 are re-brainstormed
+against what Phase 1 actually reveals.
+
+## 6. Corpus
+
+**Development ladder** (build and validate the instrument):
+elementwise (relu, gelu) → reduction (rowsum, softmax) → normalization (layernorm) → fused.
+Each rung introduces one new property class: pointwise → reduction order/associativity →
+numerical stability.
+
+**Then attention and GEMM** — where kernel work matters and where cross-backend translation is
+interesting.
+
+**KernelBench subset for reporting**, so headline numbers are comparable to published baselines.
+Note its PyTorch-reference framing biases toward the reference arm; that bias must be stated.
+
+## 7. Evaluation
+
+Metrics, in the order they become measurable:
+
+1. **Bug-catching power** — against a mutation corpus of deliberately-broken kernels. Scored as
+   faults detected and cases-to-first-failure. Reported split by tolerance-free vs
+   tolerance-dependent detection.
+2. **False-positive rate** — how often a correct kernel is flagged. Includes the case where an
+   authored property is simply not true of the op; this makes spec-authoring quality an observable
+   in the same experiment rather than a separate study.
+3. **Authoring cost** — effort to onboard a new task under each strategy: lines, time, token cost,
+   how much can be auto-drafted.
+4. **Downstream kernel quality** — end-to-end effect on generated kernel speed. Requires the full
+   loop; deferred to a later phase.
+
+Cost-per-bug is reported alongside detection, since an oracle's latency caps the search rate of
+any agentic inner loop.
+
+## 8. Execution environment
+
+CPU-only development and CI; hardware acquired on demand and run in batches. This is why the
+CPU/NumPy backend is first-class and why device execution sits behind an async batch-job boundary.
+
+## 9. LLM role
+
+**Deterministic arithmetic at the core, LLM at the edges.** Every oracle is mechanical and
+reproducible — an LLM judging float correctness would be non-reproducible, which is disqualifying
+when the oracle's own false-positive rate is a headline metric.
+
+LLMs are used for:
+- **Spec authoring** (compile-time): drafting declarative property sets for human review, after
+  which they are frozen, versioned code. This is where the authoring-cost metric lives.
+- **Kernel generation and translation** (downstream, out of scope for this slice).
+
+## 10. Non-goals
+
+- Kernel generation and translation loops (consumers of this layer)
+- Any search or optimization loop
+- Formal verification — the literature already wins where it applies; we do not compete there
+- Multi-device distributed execution
+- FP8 tolerance tables (documented in config later)
+
+## 11. Consequences for the existing skeleton
+
+- `harness/correctness.py`'s fixed five-stage pipeline is **replaced** by the property layer.
+- `HarnessResult` schema and the run ledger **survive in modified form** — extended with
+  per-property attribution, tier, tolerance_free, and telemetry.
+- The candidate-search subsystem has already been removed (PR #2).
+
+## 12. Open questions
+
+1. Does the tolerance-free subset actually dominate in low-precision long-reduction regimes? This
+   is the most interesting hypothesis available and is directly testable here.
+2. Which declarative properties fail to transfer across CUDA / Triton / NKI, and why?
+3. What is the right numerical characterization of Trainium? No published account of its rounding
+   mode, accumulation order, or accumulator width exists; the tensor-core probe methodology gives
+   a template. This is a prerequisite for any defensible NKI tolerance and is self-contained work.
+4. Can shrinking be made to *preserve or maximize the violation ratio* rather than only minimize
+   size? No prior art found.
+
+## 13. Risks
+
+| Risk | Mitigation |
+|------|-----------|
+| Reference arm wins outright, as in Hughes' study | Frame around fault-class and tolerance-free split, not a single count; the result is publishable either way |
+| Competing preprints land first | Area moves ~1/month; re-run prior-art search before submission |
+| Telemetry gaps found after an expensive run | Treat Phase B schema as the highest-risk interface; over-capture rather than under-capture |
+| Custom generator/shrinker is the main engineering cost | Accepted deliberately; harvest Hypothesis corpora to avoid rebuilding float edge-case tuning |
