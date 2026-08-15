@@ -21,6 +21,18 @@ criteria:
       type: unit_test
       test: tests/unit/props/test_table.py::test_round_trip_preserves_tensors_bitwise
 
+  - id: TABLE_NEVER_TORN
+    description: a failed write loses the table rather than pairing old metadata with new tensors
+    check:
+      type: unit_test
+      test: tests/unit/props/test_table.py::test_torn_rewrite_never_pairs_old_metadata_with_new_tensors
+
+  - id: UNIQUE_CASE_IDS
+    description: duplicate case ids in one write are rejected before any disk contact
+    check:
+      type: unit_test
+      test: tests/unit/props/test_table.py::test_duplicate_case_ids_in_one_write_are_rejected
+
   - id: THREE_VALUED_VERDICT
     description: an empty property set is inconclusive, never a pass
     check:
