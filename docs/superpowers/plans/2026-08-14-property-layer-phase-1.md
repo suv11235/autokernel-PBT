@@ -1521,46 +1521,46 @@ Create `tests/unit/props/test_tolerance.py`:
 
 import numpy as np
 
-from autokernel_pbt.props.tolerance import DEFAULT_THRESH, machine_eps, test_ratio
+from autokernel_pbt.props.tolerance import DEFAULT_THRESH, machine_eps, residual_ratio
 
 
 def test_identical_arrays_give_zero_ratio():
     x = np.ones((4, 4), dtype=np.float32)
-    assert test_ratio(x, x) == 0.0
+    assert residual_ratio(x, x) == 0.0
 
 
 def test_ratio_is_dimensionless_across_scale():
     # Scaling both arrays by 1000 must not change the ratio.
     ref = np.linspace(1.0, 2.0, 16, dtype=np.float64).reshape(4, 4)
     cand = ref + 1e-12
-    small = test_ratio(cand, ref)
-    large = test_ratio(cand * 1000.0, ref * 1000.0)
+    small = residual_ratio(cand, ref)
+    large = residual_ratio(cand * 1000.0, ref * 1000.0)
     assert np.isclose(small, large, rtol=1e-6)
 
 
 def test_float32_rounding_stays_under_threshold():
     ref = np.random.default_rng(0).normal(size=(64, 64))
     cand = ref.astype(np.float32).astype(np.float64)
-    assert test_ratio(cand, ref, dtype=np.float32) < DEFAULT_THRESH
+    assert residual_ratio(cand, ref, dtype=np.float32) < DEFAULT_THRESH
 
 
 def test_gross_error_exceeds_threshold():
     ref = np.ones((8, 8), dtype=np.float32)
     cand = ref.copy()
     cand[0, 0] = 5.0
-    assert test_ratio(cand, ref) > DEFAULT_THRESH
+    assert residual_ratio(cand, ref) > DEFAULT_THRESH
 
 
 def test_nan_in_candidate_gives_infinite_ratio():
     ref = np.ones((4,), dtype=np.float32)
     cand = np.array([np.nan, 1.0, 1.0, 1.0], dtype=np.float32)
-    assert np.isinf(test_ratio(cand, ref))
+    assert np.isinf(residual_ratio(cand, ref))
 
 
 def test_zero_reference_does_not_divide_by_zero():
     ref = np.zeros((4,), dtype=np.float32)
     cand = np.zeros((4,), dtype=np.float32)
-    assert np.isfinite(test_ratio(cand, ref))
+    assert np.isfinite(residual_ratio(cand, ref))
 
 
 def test_machine_eps_matches_numpy():
@@ -1596,7 +1596,7 @@ def machine_eps(dtype: type | np.dtype) -> float:
     return float(np.finfo(dtype).eps)
 
 
-def test_ratio(
+def residual_ratio(
     candidate: np.ndarray,
     reference: np.ndarray,
     *,
@@ -1775,7 +1775,7 @@ from typing import Protocol
 import numpy as np
 
 from autokernel_pbt.props.backends.base import ExecutionResult
-from autokernel_pbt.props.tolerance import DEFAULT_THRESH, test_ratio, within_threshold
+from autokernel_pbt.props.tolerance import DEFAULT_THRESH, residual_ratio, within_threshold
 from autokernel_pbt.props.verdict import TIER_PORTABLE, PropertyResult, Verdict
 
 # TIER_PORTABLE/TIER_BACKEND live in verdict.py, which validates tier values. Declaring
@@ -1876,7 +1876,7 @@ class RowsSumToOne:
         if not np.all(np.isfinite(y)):
             return _result(self, Verdict.INCONCLUSIVE, "non-finite output")
         sums = y.sum(axis=-1)
-        ratio = test_ratio(sums, np.ones_like(sums), dtype=y.dtype)
+        ratio = residual_ratio(sums, np.ones_like(sums), dtype=y.dtype)
         if not within_threshold(ratio):
             return _result(self, Verdict.FAIL, f"row-sum test ratio {ratio:.3g} >= {DEFAULT_THRESH}")
         return _result(self, Verdict.PASS, f"ratio={ratio:.3g}")
@@ -1897,7 +1897,7 @@ class ShiftInvariance:
             return _result(self, Verdict.INCONCLUSIVE, "group missing shift_rows partner")
         if not _usable(base) or not _usable(partner):
             return _result(self, Verdict.INCONCLUSIVE, "group contains a failed execution")
-        ratio = test_ratio(partner.outputs["y"], base.outputs["y"], dtype=base.outputs["y"].dtype)
+        ratio = residual_ratio(partner.outputs["y"], base.outputs["y"], dtype=base.outputs["y"].dtype)
         if not within_threshold(ratio):
             return _result(self, Verdict.FAIL, f"shift test ratio {ratio:.3g} >= {DEFAULT_THRESH}")
         return _result(self, Verdict.PASS, f"ratio={ratio:.3g}")
@@ -2070,7 +2070,7 @@ import numpy as np
 from autokernel_pbt.props.backends.base import ExecutionResult, kernel_inputs
 from autokernel_pbt.props.properties import CaseProperty, GroupProperty
 from autokernel_pbt.props.verdict import TIER_PORTABLE
-from autokernel_pbt.props.tolerance import DEFAULT_THRESH, test_ratio, within_threshold
+from autokernel_pbt.props.tolerance import DEFAULT_THRESH, residual_ratio, within_threshold
 from autokernel_pbt.props.verdict import PropertyResult, Verdict, summarize
 
 
@@ -2121,7 +2121,7 @@ class ReferenceOracle(_OracleBase):
             )
         expected = self.reference_fn(**kernel_inputs(row.case))
         got = row.outputs["y"]
-        ratio = test_ratio(got, expected, dtype=got.dtype)
+        ratio = residual_ratio(got, expected, dtype=got.dtype)
         ok = within_threshold(ratio, self.thresh)
         return PropertyResult(
             property_name="matches_reference",
