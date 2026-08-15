@@ -952,9 +952,25 @@ class Generator:
         self.seed = seed
 
     def generate(self, n_groups: int) -> list[CaseGroup]:
-        rng = np.random.default_rng(self.seed)
+        """Produce ``n_groups`` case groups.
+
+        Group *i* is stable under changes to ``n_groups``, to the tensor set, and to
+        relation ordering. It changes only when ``seed``, ``i``, that group's own specs,
+        or ``shapes`` change — a ``shapes`` edit remaps index to shape, which is a visible
+        semantic change to what the domain means rather than an invisible value shift.
+        """
+        if n_groups < 0:
+            raise ValueError(f"n_groups must be non-negative, got {n_groups}")
         groups: list[CaseGroup] = []
         for index in range(n_groups):
+            # One independent stream per group: group i's bytes depend only on
+            # (seed, i) and the specs it actually reads — never on how many groups were
+            # requested, nor on unrelated tensors or relations. A single shared stream
+            # desynchronizes non-monotonically when a tensor or relation is added, which
+            # would silently invalidate a recorded corpus that still looks identical by
+            # metadata. The list-key form is preferred over rng.spawn() because it is a
+            # pure function of (seed, index), so one group can be regenerated standalone.
+            rng = np.random.default_rng([self.seed, index])
             # Shape-first: cycle through every shape before repeating any.
             shape = self.domain.shapes[index % len(self.domain.shapes)]
             group_id = f"{self.domain.task_id}-g{index:05d}"
