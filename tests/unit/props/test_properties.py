@@ -19,6 +19,8 @@ from autokernel_pbt.props.properties import (
     GROUP_PROPERTY_REGISTRY,
     SOFTMAX_CASE_PROPERTIES,
     SOFTMAX_GROUP_PROPERTIES,
+    CaseProperty,
+    GroupProperty,
     OutputsAreFinite,
     RowsSumToOne,
     ShiftInvariance,
@@ -104,6 +106,34 @@ def test_shift_invariance_declares_the_relation_it_consumes():
     assert ShiftInvariance().requires_relation == ShiftRows.name == "shift_rows"
 
 
+def test_nonfinite_deferral_is_declared_as_data_not_prose():
+    """The properties that defer non-finite output must name their dependency.
+
+    ValuesInUnitInterval and RowsSumToOne return INCONCLUSIVE on NaN/Inf so the
+    defect is counted once, by OutputsAreFinite. That makes them *dependent*: a
+    property set built from acceptance.yaml that lists them without
+    outputs_are_finite is structurally incapable of catching a NaN-producing
+    kernel, and would silently record a miss for the declarative arm. Task 13
+    validates this at config-load time, which it can only do if the dependency is
+    machine-readable here.
+    """
+    assert ValuesInUnitInterval.defers_nonfinite_to == "outputs_are_finite"
+    assert RowsSumToOne.defers_nonfinite_to == "outputs_are_finite"
+    # ShiftInvariance defers only the base side; the partner side is its own finding.
+    assert ShiftInvariance.defers_nonfinite_to == "outputs_are_finite"
+    # OutputsAreFinite is the terminus: it defers to nobody.
+    assert OutputsAreFinite.defers_nonfinite_to == ""
+
+
+def test_every_declared_deferral_names_a_registered_property():
+    registries = {**CASE_PROPERTY_REGISTRY, **GROUP_PROPERTY_REGISTRY}
+    for cls in registries.values():
+        target = cls.defers_nonfinite_to
+        assert target == "" or target in CASE_PROPERTY_REGISTRY, (
+            f"{cls.__name__} defers to {target!r}, which no registry key provides"
+        )
+
+
 def test_registries_are_keyed_by_property_name():
     for name, cls in CASE_PROPERTY_REGISTRY.items():
         assert cls().name == name
@@ -115,6 +145,22 @@ def test_registries_are_keyed_by_property_name():
         "rows_sum_to_one",
     }
     assert set(GROUP_PROPERTY_REGISTRY) == {"shift_invariance"}
+
+
+def test_registered_classes_conform_to_their_scope_protocol():
+    """Runtime-checkable, because ruff is the only static gate in this repo.
+
+    An annotation of dict[str, type[CaseProperty]] buys nothing without a type
+    checker; an isinstance assertion at import time is what actually stops a class
+    missing `check` from being registered as a case property.
+    """
+    for cls in CASE_PROPERTY_REGISTRY.values():
+        assert isinstance(cls(), CaseProperty)
+    for cls in GROUP_PROPERTY_REGISTRY.values():
+        assert isinstance(cls(), GroupProperty)
+    # The two scopes are distinguishable, so the check above is not vacuous.
+    assert not isinstance(ShiftInvariance(), CaseProperty)
+    assert not isinstance(OutputsAreFinite(), GroupProperty)
 
 
 def test_softmax_bundles_match_the_registries():
@@ -176,6 +222,37 @@ def test_values_in_unit_interval_fails_on_negative():
 
 def test_values_in_unit_interval_fails_above_one():
     assert ValuesInUnitInterval().check(_row(X, _unnormalized(X) * 3.0)).verdict is Verdict.FAIL
+
+
+@pytest.mark.parametrize(
+    "boundary",
+    [np.float32(0.0), np.float32(1.0), np.float32(-0.0), np.float32(0.5)],
+)
+def test_values_in_unit_interval_admits_the_exact_boundaries(boundary):
+    y = np.full((2, 3), boundary, dtype=np.float32)
+    assert ValuesInUnitInterval().check(_row(X, y)).verdict is Verdict.PASS
+
+
+@pytest.mark.parametrize(
+    "outside",
+    [
+        np.nextafter(np.float32(1.0), np.float32(2.0)),   # 1 ulp above 1.0
+        np.nextafter(np.float32(0.0), np.float32(-1.0)),  # 1 ulp below 0.0
+    ],
+)
+def test_values_in_unit_interval_rejects_a_one_ulp_excursion(outside):
+    """The bound is exact, with no slack — that is what tolerance_free = True claims.
+
+    A slack of even 1e-3 would still pass every other test in this file, so without
+    this the module's headline tag would be unverified. Exactness is defensible
+    because softmax's rounding error is one-sided down: over all 2^23 float32
+    mantissas in [1, 2), fl(x * fl(1/x)) never exceeds 1.0, so a correct kernel
+    cannot land here by rounding alone.
+    """
+    y = _softmax(X).copy()
+    y[0, 0] = outside
+    assert float(y[0, 0]) not in (0.0, 1.0)
+    assert ValuesInUnitInterval().check(_row(X, y)).verdict is Verdict.FAIL
 
 
 def test_values_in_unit_interval_is_inconclusive_on_non_finite_output():
@@ -257,22 +334,46 @@ def test_shift_invariance_fails_on_non_invariant_kernel():
     assert ShiftInvariance().check_group(_shift_group(_naive_normalize)).verdict is Verdict.FAIL
 
 
-def test_shift_invariance_fails_on_an_overflowing_kernel():
-    """The unstable softmax the relation exists to catch: exp without max-subtraction.
-
-    Non-finite output is a FAIL here, not an INCONCLUSIVE deferral to
-    OutputsAreFinite: overflow under a large shift *is* the shift-invariance
-    violation, and deferring it would leave the relation unable to catch the one
-    bug its shift scale was chosen for.
-    """
+def _overflowing_softmax_output() -> np.ndarray:
+    """What exp-without-max-subtraction produces once the shift reaches overflow."""
     big = np.array([[100.0, 101.0, 102.0]], dtype=np.float32)
-    base_y = _softmax(np.array([[0.0, 1.0, 2.0]], dtype=np.float32))
     with np.errstate(over="ignore", invalid="ignore"):
         e = np.exp(big)
-        shifted_y = (e / e.sum(axis=-1, keepdims=True)).astype(np.float32)
-    assert not np.all(np.isfinite(shifted_y))
-    group = [_row(X, base_y), _row(big, shifted_y, ShiftRows.name)]
+        y = (e / e.sum(axis=-1, keepdims=True)).astype(np.float32)
+    assert not np.all(np.isfinite(y))
+    return y
+
+
+def test_shift_invariance_fails_when_only_the_shifted_output_is_non_finite():
+    """The unstable softmax the relation exists to catch: exp without max-subtraction.
+
+    Non-finite output on the *partner* is a FAIL, not an INCONCLUSIVE deferral to
+    OutputsAreFinite: overflowing under a large shift while the unshifted input was
+    fine *is* the shift-invariance violation, and deferring it would leave the
+    relation unable to catch the one bug its shift scale was chosen for.
+    """
+    base_y = _softmax(np.array([[0.0, 1.0, 2.0]], dtype=np.float32))
+    group = [_row(X, base_y), _row(X, _overflowing_softmax_output(), ShiftRows.name)]
     assert ShiftInvariance().check_group(group).verdict is Verdict.FAIL
+
+
+def test_shift_invariance_is_inconclusive_when_the_base_output_is_non_finite():
+    """A kernel that NaNs on the *unshifted* input has no invariance finding against it.
+
+    That defect is outputs_are_finite's, and claiming it here would inflate
+    shift_invariance's per-property detection count — a reported quantity. The
+    asymmetry is the point: the base is the reference the relation compares to, so
+    a broken base means there is nothing to compare against, not a broken relation.
+    """
+    shifted_y = _softmax(np.array([[0.0, 1.0, 2.0]], dtype=np.float32))
+    group = [_row(X, _overflowing_softmax_output()), _row(X, shifted_y, ShiftRows.name)]
+    assert ShiftInvariance().check_group(group).verdict is Verdict.INCONCLUSIVE
+
+
+def test_shift_invariance_is_inconclusive_when_both_outputs_are_non_finite():
+    y = _overflowing_softmax_output()
+    group = [_row(X, y), _row(X, y.copy(), ShiftRows.name)]
+    assert ShiftInvariance().check_group(group).verdict is Verdict.INCONCLUSIVE
 
 
 def test_shift_invariance_is_inconclusive_on_an_integer_output():
@@ -287,16 +388,35 @@ def test_shift_invariance_is_inconclusive_on_an_integer_output():
 
 
 @pytest.mark.parametrize("cls", CASE_PROPS)
-@pytest.mark.parametrize("status", [Status.LAUNCH_ERROR, Status.OUTPUT_ERROR, Status.TIMEOUT])
-def test_case_property_is_inconclusive_on_failed_execution(cls, status):
-    row = _row(X, None, status=status)
+def test_case_property_is_inconclusive_on_failed_execution(cls):
+    """A non-OK status disqualifies the row *even though an output is present*.
+
+    Status and output-presence must be independent axes. Today NumpyBackend never
+    populates outputs on a failure, so a row with both a bad status and no output
+    cannot tell the two apart — and a check that only looked at the output would
+    pass every such test. A Phase 3 timeout with a partially written device buffer
+    breaks that correlation, and this module would then judge garbage as valid.
+    """
+    row = _row(X, _softmax(X), status=Status.TIMEOUT)
+    assert row.outputs, "the point of this test is a failed row that still has an output"
     assert cls().check(row).verdict is Verdict.INCONCLUSIVE
 
 
 @pytest.mark.parametrize("cls", CASE_PROPS)
 def test_case_property_is_inconclusive_when_y_is_missing(cls):
     # status ok but the output name is absent: a backend contract violation, not a bug.
-    assert cls().check(_row(X, None)).verdict is Verdict.INCONCLUSIVE
+    row = _row(X, None)
+    assert row.status == Status.OK, "the missing output must be the only defect here"
+    assert cls().check(row).verdict is Verdict.INCONCLUSIVE
+
+
+@pytest.mark.parametrize("cls", CASE_PROPS)
+def test_case_property_detail_distinguishes_bad_status_from_missing_output(cls):
+    # "status=ok" is a misleading cause when the real defect is an absent output.
+    missing = cls().check(_row(X, None)).detail
+    failed = cls().check(_row(X, _softmax(X), status=Status.TIMEOUT)).detail
+    assert OUTPUT_NAME in missing and "status" not in missing
+    assert "timeout" in failed
 
 
 @pytest.mark.parametrize("cls", CASE_PROPS)
@@ -322,15 +442,27 @@ def test_shift_invariance_is_inconclusive_without_base():
     assert ShiftInvariance().check_group(rows).verdict is Verdict.INCONCLUSIVE
 
 
-def test_shift_invariance_is_inconclusive_on_empty_group():
-    assert ShiftInvariance().check_group([]).verdict is Verdict.INCONCLUSIVE
+def test_shift_invariance_rejects_an_empty_group():
+    """An empty group is an oracle bug, not a judgeable input.
+
+    Task 11 forms groups by grouping the replayed table on group_id, which never
+    yields an empty group, and CaseGroup separately rejects one without a base. So
+    this can only arrive from a coding error — and emitting a result for it would
+    invent an INCONCLUSIVE that joins to no row, corrupting the very count this
+    module exists to keep honest. Raising is safe here specifically because
+    evaluation is offline: no hardware time is lost to a re-run.
+    """
+    with pytest.raises(ValueError, match="empty group"):
+        ShiftInvariance().check_group([])
 
 
 @pytest.mark.parametrize("failed_index", [0, 1])
 def test_shift_invariance_is_inconclusive_when_either_execution_failed(failed_index):
+    # Status only — the outputs stay in place, so this tests its name rather than
+    # duplicating the missing-output case below.
     group = _shift_group(_softmax)
     group[failed_index].status = Status.LAUNCH_ERROR
-    group[failed_index].outputs = {}
+    assert all(r.outputs for r in group)
     assert ShiftInvariance().check_group(group).verdict is Verdict.INCONCLUSIVE
 
 
@@ -396,14 +528,6 @@ def test_group_property_attributes_every_verdict_to_its_group():
     for result in (passed, failed, inconclusive):
         _assert_attributed(result, group_id="g0")
         assert result.property_name == prop.name
-
-
-def test_group_property_is_attributed_even_when_the_group_is_empty():
-    # No rows means no group_id to read off a case, but the result still must not
-    # be orphaned when HybridOracle concatenates the two arms.
-    result = ShiftInvariance().check_group([])
-    assert result.verdict is Verdict.INCONCLUSIVE
-    assert result.group_id and not result.case_id
 
 
 # --------------------------------------------------------------------------
