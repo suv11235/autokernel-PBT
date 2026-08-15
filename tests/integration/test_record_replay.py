@@ -23,6 +23,8 @@ fairness is the whole recorded row, not the half of it named "input".
 
 from __future__ import annotations
 
+import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable
 
@@ -31,7 +33,6 @@ import pytest
 
 from autokernel_pbt.props.backends.base import OUTPUT_NAME, ExecutionResult, Status
 from autokernel_pbt.props.backends.numpy_backend import NumpyBackend
-from autokernel_pbt.props.case import CaseGroup
 from autokernel_pbt.props.generator import Generator
 from autokernel_pbt.props.oracle import (
     REFERENCE_PROPERTY,
@@ -162,18 +163,25 @@ def record(
     run_dir: Path,
     n_groups: int | None = None,
     seed: int = SEED,
-) -> tuple[ExecutionTable, CountingBackend, list[CaseGroup]]:
+) -> tuple[ExecutionTable, CountingBackend, list[ExecutionResult]]:
     """Run the real pipeline once: generate -> execute -> persist.
 
     Returns a *fresh* reader over the persisted run, never the in-memory results.
     Everything downstream of this function sees only what survived the table,
     which is exactly the constraint the architecture claims to impose on oracles.
 
-    The generated groups are returned alongside, and this is not a convenience.
-    Without them nothing in this module can distinguish "the table holds what was
-    executed" from "the read path is self-consistent" — a ``read()`` that
-    perturbed every row identically on every call is a fixed point, invisible to
-    any number of re-reads. The groups are the only witness outside the read path.
+    The in-memory ``results`` are returned alongside, and this is not a
+    convenience. They are the only witness that lives outside the read path.
+    Without one, nothing here can distinguish "the table holds what was executed"
+    from "the read path is self-consistent" — a ``read()`` that corrupted every
+    row identically on every call is a fixed point, invisible to any number of
+    re-reads, and it can destroy every detection in the run.
+
+    Note that the *generated* groups would be a weaker witness than these, not a
+    complementary one: ``NumpyBackend`` stores the very same ``Case`` object on
+    its result, so comparing generated cases against executed ones compares an
+    object with itself. ``results`` carries the outputs too, which is the half
+    that matters.
 
     ``n_groups`` defaults to the number of ladder shapes so every boundary shape
     is exercised; a smaller value is what ``Generator`` warns about, and this
@@ -186,7 +194,7 @@ def record(
     backend = CountingBackend()
     results = [backend.run(kernel, case) for group in groups for case in group.cases]
     ExecutionTable(run_dir).write(results)
-    return ExecutionTable(run_dir), backend, groups
+    return ExecutionTable(run_dir), backend, results
 
 
 def fingerprint(tensors: dict[str, np.ndarray]) -> dict[str, tuple[str, tuple[int, ...], bytes]]:
@@ -204,24 +212,56 @@ def fingerprint(tensors: dict[str, np.ndarray]) -> dict[str, tuple[str, tuple[in
     }
 
 
+def canonical_telemetry(telemetry: dict[str, Any]) -> Any:
+    """Telemetry as it survives the ledger, which is not bitwise.
+
+    ``table.py`` documents that telemetry is JSON-encoded and therefore lossy by
+    design: a tuple returns as a list, a non-string key as a string. Comparing raw
+    dicts across the persistence boundary would fail on that documented behaviour
+    rather than on corruption, so both sides are pushed through the same encoding
+    first. This keeps telemetry *witnessed* — an arm that clobbers it is still
+    caught — while not asserting a fidelity the ledger never promised.
+    """
+    return json.loads(json.dumps(telemetry, sort_keys=True, default=str))
+
+
 def row_fingerprint(row: ExecutionResult) -> tuple[Any, ...]:
     """Identity of a whole recorded execution.
 
     Every field an oracle can read is covered, because every field an oracle can
-    read is a field an oracle could corrupt for the next arm. Inputs alone are not
-    enough and the gap is not academic: ``outputs`` is what the arms actually
-    score, ``status`` gates every property's usable/unusable branch, and
-    ``telemetry`` is what tier-2 properties will read in Phase 3. An arm that
-    normalized ``outputs['y']`` in place — a plausible "repair the row" bug, not a
-    contrived one — left all inputs pristine and flipped 7 of 9 groups from FAIL
-    to not-FAIL for the arm scored after it.
+    read is a field an oracle could corrupt for the next arm. This module has now
+    learned that lesson three times, each time by finding a field it had not
+    thought of, so the list is enumerated with what each one costs:
+
+    * ``case.metadata()`` — the deadliest and the least obvious. It is not inert
+      bookkeeping: ``ShiftInvariance.check_group`` locates the base and its
+      partner *by* ``case.relation``, so an arm relabelling one row costs 14/14
+      detections on a kernel caught only by shift-invariance, and
+      ``ReferenceOracle._length`` reads ``case.shape[-1]``, so rewriting the shape
+      moves the pass/fail line — masking real detections or manufacturing false
+      ones — for 8/14.
+    * ``outputs`` — what the arms actually score. An arm that renormalized
+      ``outputs['y']`` in place, a plausible "repair the row" bug, left every
+      input byte pristine and flipped 7 of 9 groups from FAIL to not-FAIL.
+    * ``status`` and ``error`` — these gate every property's usable/unusable
+      branch, so forging them turns detections into INCONCLUSIVE wholesale.
+    * ``telemetry`` — what tier-2 properties read in Phase 3, canonicalized
+      because the ledger's JSON round trip is documented-lossy.
+
+    KNOWN AND DELIBERATELY UNCOVERED: row *order* within a group. ``rows_fingerprint``
+    keys by ``case_id``, so an arm reversing ``rows`` in place is invisible here.
+    That is latent rather than live — no property in the current set is
+    order-sensitive; base and partner are found by relation, not by index — and
+    closing it would mean asserting an ordering the table does not promise. If an
+    order-sensitive property is ever added, this is the assertion that must grow.
     """
     return (
+        row.case.metadata(),
         fingerprint(row.case.tensors),
         fingerprint(row.outputs),
         row.status,
         row.error,
-        row.telemetry,
+        canonical_telemetry(row.telemetry),
     )
 
 
@@ -233,13 +273,9 @@ def table_fingerprint(table: ExecutionTable) -> dict[str, tuple[Any, ...]]:
     return {row.case.case_id: row_fingerprint(row) for row in table.read()}
 
 
-def generated_inputs(groups: list[CaseGroup]) -> dict[str, dict[str, Any]]:
-    """What the generator produced, before execution or persistence touched it."""
-    return {case.case_id: fingerprint(case.tensors) for group in groups for case in group.cases}
-
-
-def persisted_inputs(table: ExecutionTable) -> dict[str, dict[str, Any]]:
-    return {row.case.case_id: fingerprint(row.case.tensors) for row in table.read()}
+def executed_rows(results: list[ExecutionResult]) -> dict[str, tuple[Any, ...]]:
+    """What the backend actually produced, before persistence touched it."""
+    return {result.case.case_id: row_fingerprint(result) for result in results}
 
 
 def reference_oracle() -> ReferenceOracle:
@@ -288,10 +324,14 @@ def assert_replay_fairness(run_dir: Path) -> None:
 
     Four claims, in increasing strength.
 
-    **Fidelity.** The persisted inputs are bitwise what the generator produced.
-    This is the only claim with a witness outside the read path, and it is what
-    makes the rest non-circular: a ``read()`` that corrupted every row identically
-    on every call would satisfy every self-comparison below.
+    **Fidelity.** The persisted rows — whole rows, not just their inputs — are
+    what the backend executed. This is the only claim with a witness outside the
+    read path, and it is what makes the rest non-circular: a ``read()`` that
+    corrupted every row identically on every call would satisfy every
+    self-comparison below. Witnessing only inputs here is not a weaker version of
+    this claim, it is a different and much smaller one: a read path that repaired
+    ``outputs`` would leave the inputs untouched and destroy every detection in
+    the run.
 
     **Stability.** The table is a fixed point: reading it twice yields identical
     rows. Stated with dtype, shape and raw bytes rather than value equality —
@@ -315,12 +355,12 @@ def assert_replay_fairness(run_dir: Path) -> None:
     driver does not hand arm A one corpus and arm B another — is inherited by Task
     13, which writes that driver. This test cannot discharge it.
     """
-    table, _, groups = record("softmax", correct_softmax, run_dir)
+    table, _, results = record("softmax", correct_softmax, run_dir)
 
-    generated = generated_inputs(groups)
-    assert generated, "the recorded run is empty; there is nothing to be fair about"
-    assert persisted_inputs(table) == generated, (
-        "the persisted inputs are not what the generator produced"
+    executed = executed_rows(results)
+    assert executed, "the recorded run is empty; there is nothing to be fair about"
+    assert table_fingerprint(table) == executed, (
+        "the persisted rows are not what was executed"
     )
 
     first = table_fingerprint(table)
@@ -440,6 +480,27 @@ def _clobber_status(row: ExecutionResult) -> None:
     row.error = "forged"
 
 
+def _relabel_relation(row: ExecutionResult) -> None:
+    """Rewrite ``case.relation``. The costliest corruption found so far.
+
+    ``ShiftInvariance.check_group`` finds the base and its partner *by* relation,
+    so relabelling one row costs 14/14 detections on a kernel that only that
+    property catches — and it touches not a single tensor byte.
+    """
+    row.case = replace(row.case, relation="base")
+
+
+def _rewrite_shape(row: ExecutionResult) -> None:
+    """Rewrite ``case.shape``, which ``ReferenceOracle._length`` reads.
+
+    The recorded shape sets the ``log2(n)`` divisor of the test ratio. Inflating
+    it masks real detections; shrinking it manufactures false ones. Measured cost
+    of this one: 8/14.
+    """
+    rows_, cols = row.case.shape[0], row.case.shape[-1]
+    row.case = replace(row.case, shape=(rows_, cols * 2))
+
+
 def _drift_one_ulp(row: ExecutionResult) -> None:
     x = np.array(row.case.tensors["x"], copy=True)
     if x.size:
@@ -448,10 +509,14 @@ def _drift_one_ulp(row: ExecutionResult) -> None:
     row.case.tensors["x"] = x
 
 
+def _zero_outputs(row: ExecutionResult) -> None:
+    row.outputs = {name: np.zeros_like(array) for name, array in row.outputs.items()}
+
+
 #: Corruptions injected into an *arm*, i.e. one oracle sabotaging the rows the
-#: next oracle will score. Every one of these must be caught, and the four
-#: output/telemetry/status entries are exactly the ones an input-only
-#: fingerprint missed.
+#: next oracle will score. Every one must break the criterion. Only the first two
+#: were caught by the original inputs-only fingerprint; the rest are the fields
+#: this module discovered it had forgotten, one review at a time.
 ARM_SABOTEURS = {
     "arm_corrupts_input_in_place": _corrupt_input_in_place,
     "arm_promotes_input_dtype": _promote_input_dtype,
@@ -460,34 +525,51 @@ ARM_SABOTEURS = {
     "arm_replaces_outputs": _replace_outputs,
     "arm_clobbers_telemetry": _clobber_telemetry,
     "arm_clobbers_status": _clobber_status,
+    "arm_relabels_relation": _relabel_relation,
+    "arm_rewrites_shape": _rewrite_shape,
+}
+
+#: The arms the criterion actually runs. Saboteurs are injected into *each* in
+#: turn, rather than only into the one that happens to run first. Injecting into
+#: the first arm alone leaves the second arm's non-interference assertion wholly
+#: unexercised — deleting that line kept the suite green — and asserting the arm
+#: order instead would pin an incidental detail while still not testing the line.
+SABOTAGED_ARMS = {
+    "reference": ReferenceOracle,
+    "declarative": DeclarativeOracle,
 }
 
 #: Corruptions injected into the *read path*, applied identically on every call.
 #: These are the fixed-point attacks: no amount of re-reading and comparing can
-#: see them, so they are caught only by the generator-witness fidelity check.
+#: see them, so they are caught only by the executed-rows fidelity witness.
 READ_SABOTEURS = {
     "read_drifts_one_ulp": _drift_one_ulp,
     "read_promotes_dtype": _promote_input_dtype,
+    "read_repairs_outputs": _repair_outputs,
+    "read_zeroes_outputs": _zero_outputs,
 }
 
 
+@pytest.mark.parametrize("arm", sorted(SABOTAGED_ARMS))
 @pytest.mark.parametrize("name", sorted(ARM_SABOTEURS))
-def test_an_arm_that_corrupts_rows_is_caught(tmp_path: Path, monkeypatch, name: str):
-    """Each saboteur arm must break REPLAY_FAIRNESS.
+def test_an_arm_that_corrupts_rows_is_caught(tmp_path: Path, monkeypatch, name: str, arm: str):
+    """Each saboteur must break REPLAY_FAIRNESS, from either arm.
 
-    Injected into ``ReferenceOracle.evaluate``, which the criterion runs *first* —
-    the worst case, because everything it corrupts is then scored by the
-    declarative arm as if it were the recorded execution.
+    Sabotaging the first arm is the higher-damage case — everything it corrupts is
+    then scored by the second arm as if it were the recorded execution — but it is
+    not the only one that must be caught, and testing only it leaves the second
+    arm's assertion unguarded against deletion.
     """
     corrupt = ARM_SABOTEURS[name]
-    original = ReferenceOracle.evaluate
+    cls = SABOTAGED_ARMS[arm]
+    original = cls.evaluate
 
     def evaluate(self, rows):
         for row in rows:
             corrupt(row)
         return original(self, rows)
 
-    monkeypatch.setattr(ReferenceOracle, "evaluate", evaluate)
+    monkeypatch.setattr(cls, "evaluate", evaluate)
     with pytest.raises(AssertionError):
         assert_replay_fairness(tmp_path / "run")
 

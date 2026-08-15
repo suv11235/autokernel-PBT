@@ -82,14 +82,22 @@ def test_relu_reference_preserves_the_input_dtype():
 
 
 def test_softmax_reference_survives_the_shift_scale_it_will_be_asked_about():
-    """E: the reference must not overflow where ``ShiftRows`` deliberately lands.
+    """E: the reference stays finite where ``ShiftRows`` deliberately lands.
 
-    ``ShiftRows`` scales its shifts to half the exponent at which ``exp``
-    overflows, precisely so a kernel without max-subtraction breaks. A reference
-    without max-subtraction would break on the very same rows — and because
-    ``ReferenceOracle`` suppresses numpy errors around the call, the result would
-    not be an exception but a silent INCONCLUSIVE on exactly the rows where the
-    metamorphic arm scores, biasing the comparison between arms.
+    What this pins, precisely: at the shift scale ``ShiftRows`` actually produces,
+    ``softmax_reference`` returns a finite, dtype-preserving, normalized result.
+    That matters because ``ReferenceOracle`` suppresses numpy errors around the
+    call, so a reference that broke here would not raise — it would return a
+    silent INCONCLUSIVE on exactly the rows where the metamorphic arm scores,
+    biasing the comparison between arms.
+
+    What this does NOT pin, despite an earlier version of this docstring claiming
+    it: max-subtraction. ``ShiftRows`` is calibrated to float32's overflow point
+    (``x > 88.7``), and the reference accumulates in float64, which does not
+    overflow until ``x > 709`` — so removing max-subtraction leaves these
+    assertions green. It is the *widening* that carries the reference at this
+    scale. Max-subtraction is pinned separately, one test down, at a scale where
+    float64 alone cannot save it.
 
     No ``errstate`` here on purpose: this project runs with
     ``filterwarnings = ["error"]``, so an overflow inside the reference raises and
@@ -100,6 +108,25 @@ def test_softmax_reference_survives_the_shift_scale_it_will_be_asked_about():
     assert out.dtype == x.dtype
     assert np.all(np.isfinite(out))
     assert np.allclose(np.sum(out, axis=-1), 1.0)
+
+
+def test_softmax_reference_needs_max_subtraction_not_just_float64():
+    """Pin max-subtraction at a scale where the float64 widening cannot rescue it.
+
+    float64's ``exp`` overflows above ~709. Feeding the reference a magnitude near
+    float32's own maximum puts it far past that, so an implementation relying on
+    the widening alone returns ``inf / inf = nan`` here while a max-subtracting one
+    returns the exact one-hot answer.
+
+    This scale is beyond what ``ShiftRows`` generates today, and that is the point:
+    it isolates the property rather than the operating point, so a future relation
+    with a wider scale — or an fp64 task — cannot silently lose it.
+    """
+    x = np.array([[3.0e38, 1.0]], dtype=np.float32)
+    out = softmax_reference(x)
+    assert out.dtype == x.dtype
+    assert np.all(np.isfinite(out)), "the reference overflowed; it is not max-subtracting"
+    assert np.allclose(out, np.array([[1.0, 0.0]], dtype=np.float32))
 
 
 def test_softmax_reference_is_shift_invariant():
