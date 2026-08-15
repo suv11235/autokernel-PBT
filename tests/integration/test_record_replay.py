@@ -3,13 +3,22 @@
 This module holds ``REPLAY_FAIRNESS``, the acceptance criterion the whole
 batch-first architecture exists to satisfy. The research claim is that three
 oracle strategies are compared over *byte-identical* executions; if the choice of
-oracle could influence the inputs a kernel saw, the comparison would confound
+oracle could influence what a later arm scores, the comparison would confound
 generation with checking and the headline result would be unfalsifiable.
 
 The guarantee is structural, not aspirational: oracles are handed rows read back
 from a persisted table and have no reference to the generator or the backend at
-all. These tests assert that the structure actually delivers it, and that the
-assertion is not vacuous.
+all. These tests assert that the structure actually delivers it, and — via the
+saboteur suite at the bottom — that the assertion has the *coverage* to notice
+when it does not.
+
+Coverage is the word to hold onto. An earlier version of this module fingerprinted
+``case.tensors`` and nothing else, which sounds like the right thing to protect:
+"the arms see identical inputs". It is not. The arms score ``outputs``. An arm that
+rewrote ``row.outputs['y']`` in place left every input byte untouched, passed the
+criterion, and flipped 7 of 9 groups from FAIL to not-FAIL for the arm that ran
+after it. The fixed point of that lesson is ``row_fingerprint``: the unit of
+fairness is the whole recorded row, not the half of it named "input".
 """
 
 from __future__ import annotations
@@ -22,6 +31,7 @@ import pytest
 
 from autokernel_pbt.props.backends.base import OUTPUT_NAME, ExecutionResult, Status
 from autokernel_pbt.props.backends.numpy_backend import NumpyBackend
+from autokernel_pbt.props.case import CaseGroup
 from autokernel_pbt.props.generator import Generator
 from autokernel_pbt.props.oracle import (
     REFERENCE_PROPERTY,
@@ -61,15 +71,19 @@ RELU_CASE_PROPERTIES = (OutputsAreFinite(),)
 
 
 def correct_softmax(x: np.ndarray) -> np.ndarray:
-    """A correct softmax that is *not* the reference implementation.
+    """A correct softmax, computed the way a real device kernel computes it.
 
-    It accumulates in float64 and casts back, so the recorded output differs from
-    ``softmax_reference`` in the last bits. A kernel that were literally the
-    reference would make the reference arm's comparison vacuous (ratio exactly 0)
-    and would prove nothing about the threshold.
+    Deliberately *not* the reference. It accumulates in the input's own float32
+    rather than widening to float64, so its result differs from
+    ``softmax_reference`` in the last bits and the reference arm's threshold is
+    actually exercised — measured test ratios run 0.098 to 0.248 against
+    ``DEFAULT_THRESH = 30.0``. A kernel that widened to float64 would be
+    bit-identical to the reference, every ratio would be exactly 0, and every
+    clean path in this module — this test, the fairness test's reference arm, the
+    third-oracle test, the hybrid test's clean half — would pass without the
+    comparison having been performed at all.
     """
-    wide = x.astype(np.float64)
-    shifted = wide - np.max(wide, axis=-1, keepdims=True)
+    shifted = x - np.max(x, axis=-1, keepdims=True)
     exp = np.exp(shifted)
     return (exp / np.sum(exp, axis=-1, keepdims=True)).astype(x.dtype)
 
@@ -80,8 +94,8 @@ def unnormalized_softmax(x: np.ndarray) -> np.ndarray:
     Chosen as the primary broken kernel because it is deterministic and
     data-independent — ``exp(x - max(x))`` lies in (0, 1] for every input, so
     ``values_in_unit_interval`` passes and ``rows_sum_to_one`` fails on every row
-    of every shape. That makes "which arm caught it, and via which property" an
-    assertion about the oracles rather than about a lucky draw.
+    of every non-degenerate shape. That makes "which arm caught it, and via which
+    property" an assertion about the oracles rather than about a lucky draw.
     """
     shifted = x - np.max(x, axis=-1, keepdims=True)
     return np.exp(shifted).astype(x.dtype)
@@ -148,12 +162,18 @@ def record(
     run_dir: Path,
     n_groups: int | None = None,
     seed: int = SEED,
-) -> tuple[ExecutionTable, CountingBackend]:
+) -> tuple[ExecutionTable, CountingBackend, list[CaseGroup]]:
     """Run the real pipeline once: generate -> execute -> persist.
 
     Returns a *fresh* reader over the persisted run, never the in-memory results.
     Everything downstream of this function sees only what survived the table,
     which is exactly the constraint the architecture claims to impose on oracles.
+
+    The generated groups are returned alongside, and this is not a convenience.
+    Without them nothing in this module can distinguish "the table holds what was
+    executed" from "the read path is self-consistent" — a ``read()`` that
+    perturbed every row identically on every call is a fixed point, invisible to
+    any number of re-reads. The groups are the only witness outside the read path.
 
     ``n_groups`` defaults to the number of ladder shapes so every boundary shape
     is exercised; a smaller value is what ``Generator`` warns about, and this
@@ -166,7 +186,7 @@ def record(
     backend = CountingBackend()
     results = [backend.run(kernel, case) for group in groups for case in group.cases]
     ExecutionTable(run_dir).write(results)
-    return ExecutionTable(run_dir), backend
+    return ExecutionTable(run_dir), backend, groups
 
 
 def fingerprint(tensors: dict[str, np.ndarray]) -> dict[str, tuple[str, tuple[int, ...], bytes]]:
@@ -175,8 +195,8 @@ def fingerprint(tensors: dict[str, np.ndarray]) -> dict[str, tuple[str, tuple[in
     ``np.array_equal`` is deliberately not used anywhere in this module. It
     reports True for a float32 array and a float64 array holding the same values,
     and for arrays whose shapes merely broadcast — so an arm silently rescoring a
-    promoted copy of the inputs would pass a fairness test built on it. dtype,
-    shape and ``tobytes()`` together admit no such reading.
+    promoted copy would pass a fairness test built on it. dtype, shape and
+    ``tobytes()`` together admit no such reading.
     """
     return {
         name: (array.dtype.str, tuple(array.shape), array.tobytes())
@@ -184,7 +204,41 @@ def fingerprint(tensors: dict[str, np.ndarray]) -> dict[str, tuple[str, tuple[in
     }
 
 
-def table_fingerprint(table: ExecutionTable) -> dict[str, dict[str, Any]]:
+def row_fingerprint(row: ExecutionResult) -> tuple[Any, ...]:
+    """Identity of a whole recorded execution.
+
+    Every field an oracle can read is covered, because every field an oracle can
+    read is a field an oracle could corrupt for the next arm. Inputs alone are not
+    enough and the gap is not academic: ``outputs`` is what the arms actually
+    score, ``status`` gates every property's usable/unusable branch, and
+    ``telemetry`` is what tier-2 properties will read in Phase 3. An arm that
+    normalized ``outputs['y']`` in place — a plausible "repair the row" bug, not a
+    contrived one — left all inputs pristine and flipped 7 of 9 groups from FAIL
+    to not-FAIL for the arm scored after it.
+    """
+    return (
+        fingerprint(row.case.tensors),
+        fingerprint(row.outputs),
+        row.status,
+        row.error,
+        row.telemetry,
+    )
+
+
+def rows_fingerprint(groups: dict[str, list[ExecutionResult]]) -> dict[str, tuple[Any, ...]]:
+    return {row.case.case_id: row_fingerprint(row) for rows in groups.values() for row in rows}
+
+
+def table_fingerprint(table: ExecutionTable) -> dict[str, tuple[Any, ...]]:
+    return {row.case.case_id: row_fingerprint(row) for row in table.read()}
+
+
+def generated_inputs(groups: list[CaseGroup]) -> dict[str, dict[str, Any]]:
+    """What the generator produced, before execution or persistence touched it."""
+    return {case.case_id: fingerprint(case.tensors) for group in groups for case in group.cases}
+
+
+def persisted_inputs(table: ExecutionTable) -> dict[str, dict[str, Any]]:
     return {row.case.case_id: fingerprint(row.case.tensors) for row in table.read()}
 
 
@@ -220,52 +274,60 @@ def failing_properties(oracle: Any, table: ExecutionTable) -> set[str]:
     }
 
 
+def group_shapes(table: ExecutionTable) -> dict[str, tuple[int, ...]]:
+    return {row.case.group_id: tuple(row.case.shape) for row in table.read()}
+
+
 # --------------------------------------------------------------------------- #
 # REPLAY_FAIRNESS
 # --------------------------------------------------------------------------- #
 
 
-def rows_fingerprint(groups: dict[str, list[ExecutionResult]]) -> dict[str, Any]:
-    return {
-        row.case.case_id: fingerprint(row.case.tensors)
-        for rows in groups.values()
-        for row in rows
-    }
+def assert_replay_fairness(run_dir: Path) -> None:
+    """The criterion itself, factored out so saboteurs can be run against it.
 
+    Four claims, in increasing strength.
 
-def test_both_arms_see_byte_identical_inputs(tmp_path: Path):
-    """Acceptance criterion REPLAY_FAIRNESS.
+    **Fidelity.** The persisted inputs are bitwise what the generator produced.
+    This is the only claim with a witness outside the read path, and it is what
+    makes the rest non-circular: a ``read()`` that corrupted every row identically
+    on every call would satisfy every self-comparison below.
 
-    Three claims, in increasing strength.
+    **Stability.** The table is a fixed point: reading it twice yields identical
+    rows. Stated with dtype, shape and raw bytes rather than value equality —
+    ``test_the_fairness_assertion_discriminates`` pins that the comparison can
+    tell a perturbed row from an intact one.
 
-    First, the table is a fixed point: reading it twice yields byte-identical
-    input tensors. On its own this could pass trivially, so it is stated with
-    dtype, shape and raw bytes rather than value equality —
-    ``test_the_fairness_assertion_can_actually_fail`` pins that the comparison can
-    tell a perturbed table from an intact one.
+    **Shared identity.** The two arms are handed *the same row objects*, not two
+    equivalent reads. Fairness is not "the arms saw equal-looking data", it is
+    "there was one execution and both arms scored it". Passing the identical
+    objects makes divergence impossible by construction rather than by
+    comparison, and makes in-memory corruption detectable — a fresh read per arm
+    would hide it, since each arm would scribble on its own throwaway copy.
 
-    Second, and this is what the research claim actually needs: the two arms are
-    handed *the same row objects*, not two equivalent reads. Fairness is not "the
-    arms saw equal-looking data", it is "there was one execution and both arms
-    scored it". Passing the identical objects makes any divergence impossible by
-    construction rather than by comparison, and makes in-memory mutation
-    detectable — a fresh read per arm would hide it, since each arm would scribble
-    on its own throwaway copy.
+    **Non-interference.** Neither arm perturbs what it was handed, in any field.
+    The rows are fingerprinted whole after each arm, and the table is re-read from
+    disk at the end to cover an arm reaching past its arguments to the ledger.
 
-    Third, neither arm perturbs what it was handed. The reference arm recomputes
-    softmax from every recorded input and the declarative arm scans and reduces
-    over outputs; either could plausibly write in place. The shared rows are
-    fingerprinted after each arm, and the table is re-read from disk at the end to
-    cover an arm that reached past its arguments to the ledger itself.
+    One limit, stated so it is not mistaken for a guarantee: "the two arms were
+    handed the same groups" is unreachable here *by construction of this test*,
+    which passes one dict to both. The system-level obligation — that a real
+    driver does not hand arm A one corpus and arm B another — is inherited by Task
+    13, which writes that driver. This test cannot discharge it.
     """
-    table, _ = record("softmax", correct_softmax, tmp_path / "run")
+    table, _, groups = record("softmax", correct_softmax, run_dir)
+
+    generated = generated_inputs(groups)
+    assert generated, "the recorded run is empty; there is nothing to be fair about"
+    assert persisted_inputs(table) == generated, (
+        "the persisted inputs are not what the generator produced"
+    )
 
     first = table_fingerprint(table)
-    second = table_fingerprint(ExecutionTable(tmp_path / "run"))
-    assert first, "the recorded run is empty; there is nothing to be fair about"
+    second = table_fingerprint(ExecutionTable(run_dir))
     assert first.keys() == second.keys()
     for case_id in first:
-        assert first[case_id] == second[case_id], f"inputs differ between reads for {case_id}"
+        assert first[case_id] == second[case_id], f"rows differ between reads for {case_id}"
 
     # One read, shared by both arms. Everything below scores these exact objects.
     shared = table.read_groups()
@@ -275,39 +337,43 @@ def test_both_arms_see_byte_identical_inputs(tmp_path: Path):
     reference_verdicts = {
         group_id: summary(reference_oracle().evaluate(rows)) for group_id, rows in shared.items()
     }
-    after_reference = rows_fingerprint(shared)
-    assert after_reference == before, "the reference arm mutated the rows it was handed"
+    assert rows_fingerprint(shared) == before, "the reference arm mutated the rows it was handed"
 
     declarative_verdicts = {
         group_id: summary(declarative_oracle().evaluate(rows))
         for group_id, rows in shared.items()
     }
-    after_declarative = rows_fingerprint(shared)
-    assert after_declarative == before, "the declarative arm mutated the rows it was handed"
+    assert rows_fingerprint(shared) == before, (
+        "the declarative arm mutated the rows it was handed"
+    )
 
-    # Both arms must actually have judged every recorded group, or "same inputs"
-    # is a statement about rows nobody scored.
+    # Both arms must actually have judged every recorded group, or "same rows" is
+    # a statement about rows nobody scored.
     assert reference_verdicts.keys() == declarative_verdicts.keys() == shared.keys()
     assert reference_verdicts and declarative_verdicts
 
-    assert table_fingerprint(ExecutionTable(tmp_path / "run")) == before, (
+    assert table_fingerprint(ExecutionTable(run_dir)) == before, (
         "scoring changed the persisted table"
     )
 
 
-def test_the_fairness_assertion_can_actually_fail(tmp_path: Path):
-    """Guard against a vacuous REPLAY_FAIRNESS.
+def test_both_arms_see_byte_identical_inputs(tmp_path: Path):
+    """Acceptance criterion REPLAY_FAIRNESS. See ``assert_replay_fairness``."""
+    assert_replay_fairness(tmp_path / "run")
 
-    ``fingerprint`` is the comparison the criterion above is built on. If it
-    could not distinguish a perturbed table from an intact one, the criterion
-    would assert nothing. Three perturbations that ``np.array_equal`` would miss
-    or under-report are injected here: a one-ulp value change, a dtype promotion,
-    and a reshape. Each must be visible.
+
+def test_the_fairness_assertion_discriminates(tmp_path: Path):
+    """Guard that ``fingerprint`` can tell perturbed bytes from intact ones.
+
+    This covers ``fingerprint``'s *discrimination*. The saboteur suite below
+    covers its *coverage* — which fields it is applied to — and that is a
+    genuinely different property: the original version of this module had perfect
+    discrimination over a set of fields that omitted ``outputs``, and so certified
+    a run in which one arm rewrote what the next arm scored.
     """
-    table, _ = record("softmax", correct_softmax, tmp_path / "run")
+    table, _, _ = record("softmax", correct_softmax, tmp_path / "run")
     rows = table.read()
     original = fingerprint(rows[0].case.tensors)
-
     x = rows[0].case.tensors["x"]
 
     perturbed = x.copy()
@@ -324,12 +390,156 @@ def test_the_fairness_assertion_can_actually_fail(tmp_path: Path):
 
 
 # --------------------------------------------------------------------------- #
+# Saboteurs: does the criterion have the coverage it claims?
+# --------------------------------------------------------------------------- #
+
+
+def _corrupt_input_in_place(row: ExecutionResult) -> None:
+    row.case.tensors["x"] = row.case.tensors["x"] * np.float32(1.0000001)
+
+
+def _promote_input_dtype(row: ExecutionResult) -> None:
+    row.case.tensors.update({k: v.astype(np.float64) for k, v in row.case.tensors.items()})
+
+
+def _corrupt_output_in_place(row: ExecutionResult) -> None:
+    if OUTPUT_NAME in row.outputs:
+        y = row.outputs[OUTPUT_NAME]
+        if y.size:
+            writable = np.array(y, copy=True)
+            writable.reshape(-1)[0] = np.nextafter(
+                writable.reshape(-1)[0], np.array(np.inf, dtype=y.dtype)
+            )
+            row.outputs[OUTPUT_NAME] = writable
+
+
+def _repair_outputs(row: ExecutionResult) -> None:
+    """The realistic bug: an arm that "helpfully" renormalizes the row it scores.
+
+    This is the one that motivated the whole fix. It leaves every input byte
+    untouched, so an input-only fingerprint certifies the run — while a later arm
+    scores a normalized ``y`` and its detections evaporate.
+    """
+    if OUTPUT_NAME in row.outputs:
+        y = np.asarray(row.outputs[OUTPUT_NAME], dtype=np.float64)
+        total = np.sum(y, axis=-1, keepdims=True)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            row.outputs[OUTPUT_NAME] = (y / total).astype(row.outputs[OUTPUT_NAME].dtype)
+
+
+def _replace_outputs(row: ExecutionResult) -> None:
+    row.outputs = {name: np.zeros_like(array) for name, array in row.outputs.items()}
+
+
+def _clobber_telemetry(row: ExecutionResult) -> None:
+    row.telemetry = {"backend": "forged", "wall_ms": 0.0}
+
+
+def _clobber_status(row: ExecutionResult) -> None:
+    row.status = Status.TIMEOUT
+    row.error = "forged"
+
+
+def _drift_one_ulp(row: ExecutionResult) -> None:
+    x = np.array(row.case.tensors["x"], copy=True)
+    if x.size:
+        flat = x.reshape(-1)
+        flat[0] = np.nextafter(flat[0], np.float32(np.inf))
+    row.case.tensors["x"] = x
+
+
+#: Corruptions injected into an *arm*, i.e. one oracle sabotaging the rows the
+#: next oracle will score. Every one of these must be caught, and the four
+#: output/telemetry/status entries are exactly the ones an input-only
+#: fingerprint missed.
+ARM_SABOTEURS = {
+    "arm_corrupts_input_in_place": _corrupt_input_in_place,
+    "arm_promotes_input_dtype": _promote_input_dtype,
+    "arm_corrupts_output_in_place": _corrupt_output_in_place,
+    "arm_repairs_outputs": _repair_outputs,
+    "arm_replaces_outputs": _replace_outputs,
+    "arm_clobbers_telemetry": _clobber_telemetry,
+    "arm_clobbers_status": _clobber_status,
+}
+
+#: Corruptions injected into the *read path*, applied identically on every call.
+#: These are the fixed-point attacks: no amount of re-reading and comparing can
+#: see them, so they are caught only by the generator-witness fidelity check.
+READ_SABOTEURS = {
+    "read_drifts_one_ulp": _drift_one_ulp,
+    "read_promotes_dtype": _promote_input_dtype,
+}
+
+
+@pytest.mark.parametrize("name", sorted(ARM_SABOTEURS))
+def test_an_arm_that_corrupts_rows_is_caught(tmp_path: Path, monkeypatch, name: str):
+    """Each saboteur arm must break REPLAY_FAIRNESS.
+
+    Injected into ``ReferenceOracle.evaluate``, which the criterion runs *first* —
+    the worst case, because everything it corrupts is then scored by the
+    declarative arm as if it were the recorded execution.
+    """
+    corrupt = ARM_SABOTEURS[name]
+    original = ReferenceOracle.evaluate
+
+    def evaluate(self, rows):
+        for row in rows:
+            corrupt(row)
+        return original(self, rows)
+
+    monkeypatch.setattr(ReferenceOracle, "evaluate", evaluate)
+    with pytest.raises(AssertionError):
+        assert_replay_fairness(tmp_path / "run")
+
+
+@pytest.mark.parametrize("name", sorted(READ_SABOTEURS))
+def test_a_read_path_that_corrupts_rows_is_caught(tmp_path: Path, monkeypatch, name: str):
+    corrupt = READ_SABOTEURS[name]
+    original = ExecutionTable.read
+
+    def read(self):
+        rows = original(self)
+        for row in rows:
+            corrupt(row)
+        return rows
+
+    monkeypatch.setattr(ExecutionTable, "read", read)
+    with pytest.raises(AssertionError):
+        assert_replay_fairness(tmp_path / "run")
+
+
+def test_a_repairing_arm_would_actually_destroy_detections(tmp_path: Path):
+    """Why the saboteur suite is not paranoia: the damage, measured.
+
+    ``_repair_outputs`` is scored against a genuinely broken kernel here. Without
+    the criterion above catching it, an arm running first would silently convert
+    the arm running second into one that finds nothing — and the comparison the
+    project reports would be between a real oracle and a sabotaged one.
+    """
+    table, _, _ = record("softmax", unnormalized_softmax, tmp_path / "run")
+    declarative = declarative_oracle()
+
+    honest = arm_verdicts(declarative, table)
+    honest_failures = {gid for gid, v in honest.items() if v is Verdict.FAIL}
+    assert honest_failures, "the broken kernel must be detected before sabotage"
+
+    repaired = table.read_groups()
+    for rows in repaired.values():
+        for row in rows:
+            _repair_outputs(row)
+    after = {gid: summary(declarative.evaluate(rows)) for gid, rows in repaired.items()}
+    still_failing = {gid for gid, v in after.items() if v is Verdict.FAIL}
+
+    assert still_failing < honest_failures, "the repair must destroy detections to be worth guarding"
+
+
+# --------------------------------------------------------------------------- #
 # A correct kernel, a broken kernel
 # --------------------------------------------------------------------------- #
 
 
 def test_correct_kernel_passes_both_arms(tmp_path: Path):
-    table, _ = record("softmax", correct_softmax, tmp_path / "run")
+    table, _, _ = record("softmax", correct_softmax, tmp_path / "run")
 
     reference = arm_verdicts(reference_oracle(), table)
     declarative = arm_verdicts(declarative_oracle(), table)
@@ -339,8 +549,38 @@ def test_correct_kernel_passes_both_arms(tmp_path: Path):
     assert set(declarative.values()) == {Verdict.PASS}, declarative
 
 
-def group_shapes(table: ExecutionTable) -> dict[str, tuple[int, ...]]:
-    return {row.case.group_id: tuple(row.case.shape) for row in table.read()}
+def test_the_reference_arm_actually_exercises_its_threshold(tmp_path: Path):
+    """A passing reference arm must be passing on a real comparison, not on ratio 0.
+
+    If the kernel under test were bit-identical to the reference, every ratio
+    would be exactly 0 and every clean reference-arm path in this module would be
+    vacuous — passing without the threshold ever having been consulted. So every
+    non-degenerate row is required to produce a strictly positive ratio, well
+    inside the threshold (measured: 0.033 to 0.248 against 30.0).
+
+    Single-column rows are exempt and, once again, for a real reason: softmax of
+    an ``(m, 1)`` input is exactly 1.0 in any precision, so kernel and reference
+    agree bitwise there and a zero ratio is the correct answer rather than a sign
+    of vacuity.
+    """
+    table, _, _ = record("softmax", correct_softmax, tmp_path / "run")
+    oracle = reference_oracle()
+    ratios = {}
+    for rows in table.read_groups().values():
+        for row, result in zip(rows, oracle.evaluate(rows)):
+            assert result.verdict is Verdict.PASS
+            assert result.detail.startswith("ratio=")
+            ratios[row.case.case_id] = (
+                tuple(row.case.shape),
+                float(result.detail.removeprefix("ratio=")),
+            )
+    assert ratios
+    discriminating = [r for shape, r in ratios.values() if shape[-1] > 1]
+    assert discriminating
+    assert min(discriminating) > 0.0, (
+        "the kernel is bit-identical to the reference; the arm's threshold is never consulted"
+    )
+    assert max(discriminating) < oracle.thresh
 
 
 def test_unnormalized_softmax_is_caught_by_both_arms(tmp_path: Path):
@@ -355,12 +595,9 @@ def test_unnormalized_softmax_is_caught_by_both_arms(tmp_path: Path):
     On an ``(m, 1)`` input every row's max is its only element, so
     ``exp(x - max) == 1`` and the row already sums to one — this kernel is not
     merely undetected there, it is *correct* there, and so is agreed to be correct
-    by both arms. The degenerate rungs of the ladder are therefore blind to a
-    whole class of normalization bug, which is a fact about the corpus rather than
-    about the oracles; it is asserted below so it cannot be mistaken for a
-    detection gap in an arm.
+    by both arms. See ``_LADDER_SHAPES`` for what that costs the reported numbers.
     """
-    table, _ = record("softmax", unnormalized_softmax, tmp_path / "run")
+    table, _, _ = record("softmax", unnormalized_softmax, tmp_path / "run")
     shapes = group_shapes(table)
     discriminating = {gid for gid, shape in shapes.items() if shape[-1] > 1}
     degenerate = set(shapes) - discriminating
@@ -389,12 +626,14 @@ def test_naive_softmax_is_caught_by_the_metamorphic_relation(tmp_path: Path):
     A softmax without max-subtraction is mathematically shift-invariant and only
     breaks once ``exp`` overflows, which needs ``x > 88.7`` in float32 — a regime
     unit-scale inputs never reach. It is the *shifted partner*, drawn at the
-    dtype's overflow scale, that exposes it. Overflow is data-dependent, so this
-    runs several groups per shape to make the detection a property of the ladder
-    rather than of one draw.
+    dtype's overflow scale, that exposes it.
+
+    The seed is fixed, so this is deterministic rather than sampled. The margin is
+    also wide: the measured per-row corruption rate is 3.34% over the 248 rows run
+    here, so P(no detection) is about 2e-4, and 60 of 60 trial seeds detect.
     """
     task = TASKS["softmax"]
-    table, _ = record(
+    table, _, _ = record(
         "softmax", naive_softmax, tmp_path / "run", n_groups=4 * len(task.domain.shapes)
     )
 
@@ -429,7 +668,7 @@ def test_relu_uses_only_the_properties_relu_actually_obeys(tmp_path: Path):
     denominator of the detection rate. That silent degradation is asserted below
     so the choice is recorded as a measurement rather than a preference.
     """
-    table, _ = record("relu", correct_relu, tmp_path / "run")
+    table, _, _ = record("relu", correct_relu, tmp_path / "run")
 
     misapplied = DeclarativeOracle(SOFTMAX_CASE_PROPERTIES, SOFTMAX_GROUP_PROPERTIES)
     for rows in table.read_groups().values():
@@ -447,7 +686,7 @@ def test_relu_uses_only_the_properties_relu_actually_obeys(tmp_path: Path):
 
 
 def test_relu_broken_kernel_is_caught_by_its_own_property_set(tmp_path: Path):
-    table, _ = record("relu", nan_relu, tmp_path / "run")
+    table, _, _ = record("relu", nan_relu, tmp_path / "run")
     arm = DeclarativeOracle(RELU_CASE_PROPERTIES)
     assert Verdict.FAIL in arm_verdicts(arm, table).values()
     assert failing_properties(arm, table) == {OutputsAreFinite.name}
@@ -462,10 +701,10 @@ def test_relu_reference_arm_scores_the_relu_table(tmp_path: Path):
     so a reference that silently promoted would look like a broken kernel on every
     single row.
     """
-    clean, _ = record("relu", correct_relu, tmp_path / "clean")
+    clean, _, _ = record("relu", correct_relu, tmp_path / "clean")
     assert set(arm_verdicts(ReferenceOracle(REFERENCES["relu"]), clean).values()) == {Verdict.PASS}
 
-    broken, _ = record("relu", nan_relu, tmp_path / "broken")
+    broken, _, _ = record("relu", nan_relu, tmp_path / "broken")
     verdicts = arm_verdicts(ReferenceOracle(REFERENCES["relu"]), broken)
     assert Verdict.FAIL in verdicts.values(), verdicts
 
@@ -489,7 +728,7 @@ def test_a_third_oracle_scores_the_table_with_no_re_execution(tmp_path: Path):
         calls["kernel"] += 1
         return correct_softmax(x)
 
-    _, backend = record("softmax", counted, tmp_path / "run")
+    _, backend, _ = record("softmax", counted, tmp_path / "run")
     executions_after_run = backend.calls
     kernel_calls_after_run = calls["kernel"]
     assert executions_after_run == kernel_calls_after_run > 0
@@ -513,8 +752,8 @@ def test_hybrid_consults_the_reference_arm_only_when_the_laws_pass(tmp_path: Pat
     is exactly what ``HybridOracle``'s docstring warns must not be dropped from a
     cost-per-bug figure, so it is asserted in both directions.
     """
-    clean, _ = record("softmax", correct_softmax, tmp_path / "run-clean")
-    broken, _ = record("softmax", unnormalized_softmax, tmp_path / "run-broken")
+    clean, _, _ = record("softmax", correct_softmax, tmp_path / "run-clean")
+    broken, _, _ = record("softmax", unnormalized_softmax, tmp_path / "run-broken")
 
     declarative = declarative_oracle()
     hybrid = HybridOracle(declarative_oracle(), reference_oracle())
@@ -540,7 +779,7 @@ def test_reference_arm_length_matches_the_softmax_reduction_axis(tmp_path: Path)
     is needed — but "correct by default" is exactly the kind of thing that stays
     true only until a shape changes, so it is pinned rather than assumed.
     """
-    table, _ = record("softmax", correct_softmax, tmp_path / "run")
+    table, _, _ = record("softmax", correct_softmax, tmp_path / "run")
     oracle = reference_oracle()
     assert oracle.n is None
     rows = table.read()
@@ -555,7 +794,7 @@ def test_reference_arm_length_matches_the_softmax_reduction_axis(tmp_path: Path)
 def test_every_ladder_shape_is_exercised_and_recorded(tmp_path: Path):
     """The ladder is the recall mechanism; a shape that never runs cannot catch anything."""
     task = TASKS["softmax"]
-    table, _ = record("softmax", correct_softmax, tmp_path / "run")
+    table, _, _ = record("softmax", correct_softmax, tmp_path / "run")
     recorded = {tuple(row.case.shape) for row in table.read()}
     assert set(task.domain.shapes) <= recorded
     assert all(len(shape) == 2 for shape in task.domain.shapes)

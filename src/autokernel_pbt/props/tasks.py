@@ -41,6 +41,22 @@ from autokernel_pbt.props.relations import ShiftRows
 #:     makes softmax's output identically 1.0, which is the case where a kernel
 #:     that ignores its input entirely still looks correct, and a one-row input
 #:     removes any chance a row-index bug cancels out.
+#:
+#: MEASURED COST, which the paper must state rather than discover. Two of the nine
+#: rungs are single-column — ``(1, 1)`` and ``(17, 1)`` — and softmax on a
+#: one-column input is exactly 1.0 for *any* implementation. A whole class of
+#: normalization bug is therefore not merely undetected on those rungs, it is
+#: absent: the broken kernel is genuinely correct there, and both arms correctly
+#: PASS. So roughly 22% of groups (2/9) score such a kernel as clean, and the
+#: absolute detection rate this corpus reports is understated by that constant.
+#:
+#: They are kept anyway, and the choice is deliberate. They still catch row-index
+#: and tail-handling bugs, which is what they were added for, and an asserted
+#: blind spot is worth more than a hidden one — see
+#: ``tests/integration/test_record_replay.py::test_unnormalized_softmax_is_caught_by_both_arms``,
+#: which pins the blindness so it cannot be misread as a gap in an oracle. The
+#: deflation applies to every arm equally, so the arm-vs-arm comparison the
+#: project actually reports stays unbiased; only the absolute number moves.
 _LADDER_SHAPES: tuple[tuple[int, ...], ...] = (
     (8, 8),
     (4, 16),
