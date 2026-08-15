@@ -1,5 +1,7 @@
 """Verdict semantics tests."""
 
+import json
+
 import pytest
 
 from autokernel_pbt.props.verdict import PropertyResult, Verdict, summarize
@@ -30,15 +32,25 @@ def test_empty_results_are_inconclusive_not_pass():
 
 
 def test_result_records_attribution_fields():
-    result = _r("softmax_rows_sum_to_one", Verdict.FAIL, tolerance_free=False)
+    """PropertyResult records all attribution fields; defaults apply when not set."""
+    result = PropertyResult(
+        property_name="softmax_rows_sum_to_one",
+        tier=1,
+        tolerance_free=False,
+        verdict=Verdict.FAIL
+    )
     assert result.property_name == "softmax_rows_sum_to_one"
     assert result.tier == 1
     assert result.tolerance_free is False
+    assert result.verdict is Verdict.FAIL
+    # Defaults: empty strings for optional fields
+    assert result.detail == ""
+    assert result.case_id == ""
+    assert result.group_id == ""
+    # Frozen: no mutations allowed
+    with pytest.raises(AttributeError):
+        result.property_name = "other"
 
-
-# =============================================================================
-# Design Question C: Prove summarize's precedence is not accidental
-# =============================================================================
 
 def test_fail_alone_returns_fail():
     """FAIL by itself should return FAIL."""
@@ -60,10 +72,6 @@ def test_fail_and_inconclusive_fail_dominates():
     results = [_r("a", Verdict.INCONCLUSIVE), _r("b", Verdict.FAIL)]
     assert summarize(results) is Verdict.FAIL
 
-
-# =============================================================================
-# Design Question D: Sequence/Iterable behavior with generators
-# =============================================================================
 
 def test_summarize_accepts_generator():
     """summarize should accept a generator without exhausting it prematurely."""
@@ -96,34 +104,20 @@ def test_summarize_generator_with_inconclusive_no_fail():
     assert result is Verdict.INCONCLUSIVE
 
 
-# =============================================================================
-# Verdict rendering behavior (str-mixin consistency)
-# =============================================================================
-
-def test_verdict_str_consistent_across_versions():
-    """Verdict string representation should be the wire value, not the name."""
+def test_verdict_str_mixin_equality():
+    """Verdict equals its wire value string for defensive Python 3.10+ portability."""
     assert str(Verdict.PASS) == "pass"
-    assert str(Verdict.FAIL) == "fail"
-    assert str(Verdict.INCONCLUSIVE) == "inconclusive"
-
-
-def test_verdict_format_consistent_across_versions():
-    """Verdict format should be the wire value, not the name."""
-    assert format(Verdict.PASS) == "pass"
+    assert Verdict.PASS == "pass"
     assert format(Verdict.FAIL) == "fail"
-    assert format(Verdict.INCONCLUSIVE) == "inconclusive"
-
-
-def test_verdict_in_f_string():
-    """Verdict in an f-string should use the wire value."""
-    assert f"{Verdict.PASS}" == "pass"
-    assert f"{Verdict.FAIL}" == "fail"
     assert f"{Verdict.INCONCLUSIVE}" == "inconclusive"
 
 
-# =============================================================================
-# Tier validation
-# =============================================================================
+def test_verdict_json_serializable():
+    """Verdict must serialize to JSON as its wire value, not raise TypeError."""
+    data = {"result": Verdict.PASS}
+    serialized = json.dumps(data)
+    assert serialized == '{"result": "pass"}'
+
 
 def test_property_result_accepts_tier_1():
     """Tier 1 should be accepted (portable/semantic)."""
@@ -167,3 +161,51 @@ def test_property_result_rejects_tier_zero():
             tolerance_free=True,
             verdict=Verdict.PASS
         )
+
+
+def test_property_result_case_id_defaults_empty():
+    """case_id defaults to empty string."""
+    result = PropertyResult(
+        property_name="test",
+        tier=1,
+        tolerance_free=True,
+        verdict=Verdict.PASS
+    )
+    assert result.case_id == ""
+
+
+def test_property_result_group_id_defaults_empty():
+    """group_id defaults to empty string."""
+    result = PropertyResult(
+        property_name="test",
+        tier=1,
+        tolerance_free=True,
+        verdict=Verdict.PASS
+    )
+    assert result.group_id == ""
+
+
+def test_property_result_can_carry_case_id():
+    """A case property can set case_id; group_id remains empty."""
+    result = PropertyResult(
+        property_name="check_range",
+        tier=1,
+        tolerance_free=True,
+        verdict=Verdict.PASS,
+        case_id="case_0"
+    )
+    assert result.case_id == "case_0"
+    assert result.group_id == ""
+
+
+def test_property_result_can_carry_group_id():
+    """A group property can set group_id; case_id remains empty."""
+    result = PropertyResult(
+        property_name="check_all_finite",
+        tier=2,
+        tolerance_free=False,
+        verdict=Verdict.FAIL,
+        group_id="group_5"
+    )
+    assert result.case_id == ""
+    assert result.group_id == "group_5"

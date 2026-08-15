@@ -10,11 +10,10 @@ from enum import Enum
 class Verdict(str, Enum):
     """Execution verdict: PASS, FAIL, or INCONCLUSIVE.
 
-    A str subclass to prepare for persistence to Parquet/JSON in Phase 2,
-    where per-property attribution will be stored in the execution table.
-    Without the str mixin, rendering behavior differs across Python 3.10+
-    versions (3.10/3.11 render the value, 3.12+ renders the name).
-    Matching Status.py's pattern ensures consistent string representation.
+    A str subclass so json.dumps and Parquet persistence store the wire value
+    ("pass", "fail", "inconclusive") rather than raising TypeError or storing
+    the enum name. Without this, Phase 2's per-property attribution in the
+    execution table would require custom serialization.
     """
 
     PASS = "pass"
@@ -29,10 +28,10 @@ class Verdict(str, Enum):
     __format__ = str.__format__
 
 
-# Tier values that properties and results use. Exactly two tiers in Phase 1:
-# 1 = portable/semantic, pure functions of inputs+outputs
-# 2 = backend-specific, needs execution telemetry
-VALID_TIERS = frozenset({1, 2})
+# Tier vocabulary: the two tiers that properties use in Phase 1
+TIER_PORTABLE = 1   # pure functions of inputs+outputs
+TIER_BACKEND = 2    # needs execution telemetry
+VALID_TIERS = frozenset({TIER_PORTABLE, TIER_BACKEND})
 
 
 @dataclass(frozen=True)
@@ -43,6 +42,10 @@ class PropertyResult:
     reported split by property tier and by whether a tolerance argument was needed.
     This per-property attribution is essential for the headline claim:
     "bugs found without a tolerance argument."
+
+    The caller (Task 10 and 11) populates ``case_id`` and ``group_id`` during
+    evaluation to establish which input was judged. This association ensures
+    later phases can recover what each result judged without re-evaluating.
     """
 
     property_name: str
@@ -50,6 +53,8 @@ class PropertyResult:
     tolerance_free: bool
     verdict: Verdict
     detail: str = ""
+    case_id: str = ""   # set by case properties; "" for group properties
+    group_id: str = ""  # set by group properties; "" for case properties
 
     def __post_init__(self) -> None:
         # Validate tier is in the set of valid tiers
@@ -68,11 +73,10 @@ def summarize(results: Iterable[PropertyResult]) -> Verdict:
        checked nothing has not established correctness.
     3. All other cases (only PASS verdicts) return PASS.
 
-    Accepts any Iterable (including generators, which are not Sequences);
-    converts to list internally to allow multiple iterations.
+    Accepts any Iterable (including generators, which are not Sequences).
     """
-    # Convert to list to allow multiple iterations (needed for two any() calls)
-    results_list = list(results) if not isinstance(results, list) else results
+    # Materialize to list to allow multiple iterations
+    results_list = list(results)
 
     # FAIL dominates
     if any(r.verdict is Verdict.FAIL for r in results_list):
