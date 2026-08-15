@@ -149,11 +149,20 @@ def single_output(value: Any) -> np.ndarray:
             f"output is required"
         )
         raise OutputContractError(msg)
-    # 0-d output is deliberately NOT normalized to (1,). safetensors 0.8.0
-    # round-trips shape [] unchanged through every read path (load_file,
-    # safe_open.get_tensor, load), so there is nothing to repair — and
-    # normalizing would actively break reductions: `residual_ratio` returns inf
-    # on any shape mismatch, so a (1,) candidate against a 0-d reference
-    # (`np.sum(x)`) would fail every reduction case. Pinned by
-    # `test_zero_dim_output_round_trips_at_a_stable_shape`.
-    return array
+    # A 0-d output (any reduction: `np.sum(x)`) comes back from persistence as
+    # shape (1,), so normalize up front rather than letting the shape change
+    # under us. Replay fairness is the guarantee at stake: an oracle must score
+    # the same bytes in-process as it does from the table.
+    #
+    # The culprit is *not* safetensors, which round-trips shape [] unchanged;
+    # it is `np.ascontiguousarray`, which Task 7's writer applies to every
+    # tensor and which is documented as `ndmin=1` — it promotes 0-d to (1,).
+    # Measured on numpy 2.5.2 / safetensors 0.8.0:
+    #   save_file({"y": a})                       -> header shape [],  loads ()
+    #   save_file({"y": np.ascontiguousarray(a)}) -> header shape [1], loads (1,)
+    #
+    # REQUIRED COUNTERPART (Task 9): `residual_ratio` must apply the same
+    # `np.atleast_1d` to the *reference* side. It returns inf on any shape
+    # mismatch, so normalizing only the candidate would make every reduction
+    # case fail against its own 0-d reference.
+    return np.atleast_1d(array)

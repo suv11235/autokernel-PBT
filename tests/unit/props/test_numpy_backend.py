@@ -9,6 +9,7 @@ from autokernel_pbt.props.backends.base import (
     Status,
     kernel_inputs,
     readonly_inputs,
+    single_output,
 )
 from autokernel_pbt.props.backends.numpy_backend import NumpyBackend
 from autokernel_pbt.props.case import Case
@@ -165,30 +166,56 @@ def test_persistable_output_dtypes_are_accepted(kernel):
     assert result.outputs["y"].dtype.kind in "biuf"
 
 
-def test_scalar_output_keeps_its_zero_dim_shape():
-    """A reduction's shape must match the reference's, and `np.sum(x)` is 0-d.
-
-    `residual_ratio` returns inf on any shape mismatch, so normalizing to (1,)
-    here would fail every reduction case against its own reference.
+def test_scalar_output_is_normalized_to_one_element():
+    """A 0-d reduction output is normalized to (1,) because persistence forces
+    it: Task 7's writer calls `np.ascontiguousarray`, which is `ndmin=1`. Doing
+    it up front keeps the in-memory row identical to the replayed one instead
+    of letting the shape change under us.
     """
     result = NumpyBackend().run(lambda x: np.sum(x), _case())
     assert result.status == Status.OK
-    assert result.outputs["y"].shape == ()
-    assert result.outputs["y"] == pytest.approx(2.0)
+    assert result.outputs["y"].shape == (1,)
+    assert result.outputs["y"][0] == pytest.approx(2.0)
 
 
 def test_zero_dim_output_round_trips_at_a_stable_shape(tmp_path):
-    """Pins the premise of the above: persistence does not reshape a 0-d output.
+    """Replay fairness for reductions: (1,) at every step of the pipeline.
 
-    If a safetensors upgrade ever starts returning (1,), this fails here rather
-    than silently making replayed reductions disagree with in-memory ones.
+    The 0-d array enters `single_output`, is persisted the way Task 7 persists
+    it, and is read back — the shape must never change along the way.
     """
     from safetensors.numpy import load_file, save_file
 
-    y = NumpyBackend().run(lambda x: np.sum(x), _case()).outputs["y"]
+    raw = np.asarray(np.sum(np.arange(4, dtype=np.float32)))
+    assert raw.shape == ()
+
+    normalized = single_output(raw)
+    assert normalized.shape == (1,)
+
     path = tmp_path / "t.safetensors"
-    save_file({"y": y}, str(path))
-    assert load_file(str(path))["y"].shape == y.shape
+    save_file({"y": np.ascontiguousarray(normalized)}, str(path))
+    assert load_file(str(path))["y"].shape == (1,)
+
+    # And the backend's own output agrees with that end-to-end shape.
+    assert NumpyBackend().run(lambda x: np.sum(x), _case()).outputs["y"].shape == (1,)
+
+
+def test_ascontiguousarray_not_safetensors_is_what_promotes_zero_dim(tmp_path):
+    """Pins the actual cause, so a future reader does not blame safetensors.
+
+    If numpy ever stops promoting 0-d in `ascontiguousarray`, the normalization
+    above becomes unnecessary and this test says so.
+    """
+    from safetensors.numpy import load_file, save_file
+
+    raw = np.asarray(np.float32(6.0))
+    path = tmp_path / "t.safetensors"
+
+    save_file({"y": raw}, str(path))
+    assert load_file(str(path))["y"].shape == ()  # safetensors preserves 0-d
+
+    save_file({"y": np.ascontiguousarray(raw)}, str(path))
+    assert load_file(str(path))["y"].shape == (1,)  # ascontiguousarray promotes
 
 
 # --- Inputs are aliased but read-only for the duration of the call ---
