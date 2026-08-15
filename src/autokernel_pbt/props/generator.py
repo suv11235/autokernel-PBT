@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 
 from autokernel_pbt.props.case import BASE_RELATION, Case, CaseGroup
@@ -42,10 +44,45 @@ class Generator:
             raise ValueError(msg)
         return factory()
 
+    def _warn_unexercised_shapes(self, n_groups: int) -> None:
+        """Boundary shape coverage is the design's main recall mechanism.
+
+        Coverage is "was this shape visited at all", not frequency-weighted, so an
+        uneven split across shapes is fine -- only a never-visited shape loses recall.
+        """
+        if n_groups >= len(self.domain.shapes):
+            return
+        unexercised = self.domain.shapes[n_groups:]
+        msg = (
+            f"n_groups={n_groups} is fewer than the {len(self.domain.shapes)} shapes in "
+            f"domain {self.domain.task_id!r}; these shapes will never be exercised: "
+            f"{list(unexercised)}"
+        )
+        warnings.warn(msg, stacklevel=2)
+
     def generate(self, n_groups: int) -> list[CaseGroup]:
-        rng = np.random.default_rng(self.seed)
+        """Generate ``n_groups`` case groups.
+
+        Stability boundary: group *i*'s bytes are a pure function of ``seed``,
+        ``i``, and the specs that group actually reads. They do not change when
+        ``n_groups`` changes, when an unrelated tensor is added to the domain, or
+        when ``relations`` is reordered -- so an expensive recorded corpus stays
+        reusable across those edits. They do change when ``seed``, ``i``, that
+        group's own tensor/relation specs, or ``shapes`` change. Editing
+        ``shapes`` remaps index -> shape, which is a visible semantic change to
+        what the domain means rather than an invisible value shift.
+        """
+        if n_groups < 0:
+            raise ValueError(f"n_groups must be non-negative, got {n_groups}")
+        self._warn_unexercised_shapes(n_groups)
         groups: list[CaseGroup] = []
         for index in range(n_groups):
+            # One independent stream per group: group i's bytes depend only on
+            # (seed, i) and the specs it actually reads -- never on how many groups
+            # were requested, nor on unrelated tensors or relations. The list-key
+            # form is a pure function of (seed, index), so a single group can be
+            # regenerated standalone; rng.spawn() would force a walk of 0..i-1.
+            rng = np.random.default_rng([self.seed, index])
             # Shape-first: cycle through every shape before repeating any.
             shape = self.domain.shapes[index % len(self.domain.shapes)]
             group_id = f"{self.domain.task_id}-g{index:05d}"

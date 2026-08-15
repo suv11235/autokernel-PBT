@@ -16,6 +16,12 @@ class Case:
 
     Tensors are shared by reference across `replace()`; relations must rebind
     entries, never mutate in place.
+
+    `dtype` and `shape` describe the primary tensor `x` only; helper and
+    auxiliary tensors carry their own. A `permute_last_axis` case, for instance,
+    reports `dtype="float32"` in `metadata()` while also carrying an int64
+    `__perm__`. Consumers must read a tensor's own `.dtype`/`.shape` rather than
+    assuming the case-level fields cover every entry in `tensors`.
     """
 
     case_id: str

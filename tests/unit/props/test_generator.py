@@ -1,5 +1,7 @@
 """Generator determinism and coverage tests."""
 
+import warnings
+
 import numpy as np
 import pytest
 
@@ -85,6 +87,78 @@ def test_prefix_is_stable_across_generation_count():
             assert ca.case_id == cb.case_id
             for name in ca.tensors:
                 assert ca.tensors[name].tobytes() == cb.tensors[name].tobytes()
+
+
+def _base_bytes(groups):
+    return [g.base.tensors["x"].tobytes() for g in groups]
+
+
+def test_adding_a_tensor_does_not_perturb_existing_tensors():
+    """A corpus must be extensible: adding 'y' must not rewrite 'x'.
+
+    Under a single shared rng stream this failed for every group after the first,
+    because 'y' consumed draws that shifted 'x' in all later groups.
+    """
+    one = InputDomain(
+        task_id="softmax",
+        tensors=(TensorSpec(name="x", dtype="float32"),),
+        shapes=((4, 4),),
+        relations=("shift_rows",),
+    )
+    two = InputDomain(
+        task_id="softmax",
+        tensors=(
+            TensorSpec(name="x", dtype="float32"),
+            TensorSpec(name="y", dtype="float32"),
+        ),
+        shapes=((4, 4),),
+        relations=("shift_rows",),
+    )
+    assert _base_bytes(Generator(one, seed=42).generate(4)) == _base_bytes(
+        Generator(two, seed=42).generate(4)
+    )
+
+
+def test_reordering_relations_does_not_perturb_base_tensors():
+    """Relation order is a domain detail; it must not rewrite the base inputs.
+
+    The samplers consume variable numbers of 64-bit words, so under one shared
+    stream reordering desynchronized and resynchronized it unpredictably -- there
+    was not even a stable "first k groups match" prefix.
+    """
+    forward = InputDomain(
+        task_id="softmax",
+        tensors=(TensorSpec(name="x", dtype="float32"),),
+        shapes=((4, 4),),
+        relations=("shift_rows", "permute_last_axis"),
+    )
+    reversed_ = InputDomain(
+        task_id="softmax",
+        tensors=(TensorSpec(name="x", dtype="float32"),),
+        shapes=((4, 4),),
+        relations=("permute_last_axis", "shift_rows"),
+    )
+    assert _base_bytes(Generator(forward, seed=42).generate(8)) == _base_bytes(
+        Generator(reversed_, seed=42).generate(8)
+    )
+
+
+def test_zero_groups_is_empty_and_negative_is_rejected():
+    assert Generator(DOMAIN, seed=0).generate(0) == []
+    with pytest.raises(ValueError, match="n_groups must be non-negative"):
+        Generator(DOMAIN, seed=0).generate(-3)
+
+
+def test_too_few_groups_warns_about_unexercised_shapes():
+    """Boundary shape coverage is the recall mechanism; a never-visited shape is silent loss."""
+    with pytest.warns(UserWarning, match=r"\(1, 7\)"):
+        Generator(DOMAIN, seed=0).generate(2)
+
+
+def test_full_shape_coverage_does_not_warn():
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        Generator(DOMAIN, seed=0).generate(3)
 
 
 def test_unknown_relation_raises_value_error():
