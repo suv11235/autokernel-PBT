@@ -1776,9 +1776,10 @@ import numpy as np
 
 from autokernel_pbt.props.backends.base import ExecutionResult
 from autokernel_pbt.props.tolerance import DEFAULT_THRESH, test_ratio, within_threshold
-from autokernel_pbt.props.verdict import PropertyResult, Verdict
+from autokernel_pbt.props.verdict import TIER_PORTABLE, PropertyResult, Verdict
 
-TIER_PORTABLE = 1
+# TIER_PORTABLE/TIER_BACKEND live in verdict.py, which validates tier values. Declaring
+# them here too would assert the 1<->portable mapping in two files and let it drift.
 
 
 class CaseProperty(Protocol):
