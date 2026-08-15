@@ -209,6 +209,26 @@ correct tolerance depends on the generator's distribution, not just the dtype**.
 NVIDIA tensor cores accumulate in round-toward-zero, a systematic non-cancelling bias that breaks
 any √n-calibrated tolerance.
 
+**Measured during Phase 1 implementation (2026-08-15).** Two results worth carrying forward:
+
+*Metamorphic relations must be scaled to the failure mechanism, or they are vacuous.* A softmax
+without max-subtraction is mathematically shift invariant; it fails only when `exp` overflows
+(`x > 88.7` in float32). Shifts drawn from `N(0, 1)` reach at most ~4.7 over 100k draws, so a
+unit-scale shift relation caught the unstable kernel **0% of the time** across 400 trials.
+Scaling to `0.5·log(finfo(dtype).max)` gives an 11.8–18.0% catch rate with **0% false alarms**.
+This is a concrete instance of the vacuous-property failure mode the project exists to study,
+found in our own suite — evidence that "the property passed" is uninformative without a
+demonstrated ability to fail.
+
+*Shift invariance is only approximate in reduced precision, and the tolerance dominates.* In
+float16 a wide shift produces genuine deviations of 0.5–2 ulp (median 4.9e-4, p95 9.9e-4 against
+`eps = 9.77e-4`). False-alarm rate is entirely tolerance-driven: 100% at `atol=1e-5`, ~2–4.5% at
+`1e-3`, and 0% at `1e-2`. Repeating with fp16 inputs but exact float64 arithmetic leaves the curve
+unchanged, isolating the cause as `x + c` destroying the row's mantissa detail rather than fp16
+exp or accumulation. **Implication:** reduced-precision arms need an eps-scaled tolerance, not a
+narrower relation — which is a specific, testable instance of the general tolerance argument
+above.
+
 ### 5.4 Generator defaults are shape/dtype/backend, not adversarial values
 
 Evidence: boundary shape sampling gives 78% recall at 0% false positives; adversarial NaN/Inf

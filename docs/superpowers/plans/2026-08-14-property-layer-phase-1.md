@@ -766,16 +766,44 @@ def _derived(base: Case, relation: str, tensors: dict[str, np.ndarray]) -> Case:
     )
 
 
+def _overflow_scale(dtype: np.dtype) -> float:
+    """Shift scale large enough to reach the dtype's exp() overflow point.
+
+    A softmax without max-subtraction is *mathematically* shift invariant; it only
+    breaks when exp overflows (x > 88.7 for float32). Shifts drawn from N(0,1) never
+    get there, so a unit-scale relation makes the shift-invariance property vacuous
+    against the exact defect it exists to catch.
+    """
+    return 0.5 * float(np.log(np.finfo(dtype).max))
+
+
 class ShiftRows:
-    """x -> x + c, one constant per row. Consumed by shift-invariance properties."""
+    """x -> x + c, one constant per row. Consumed by shift-invariance properties.
+
+    Caveat for reduced precision: in float16 a wide shift causes *genuine* false
+    alarms, because x + c destroys the row's mantissa detail — shift invariance is
+    only approximate there. Phase 1 is float32-only; ShiftInvariance will need a
+    dtype-aware tolerance before fp16 lands.
+    """
 
     name = "shift_rows"
+
+    def __init__(self, scale: float | None = None) -> None:
+        # None means "derive from the tensor's dtype at derive() time". A hard-coded
+        # float32 default would silently mis-scale fp16.
+        self.scale = scale
 
     def derive(self, base: Case, rng: np.random.Generator) -> Case:
         tensors = dict(base.tensors)
         x = tensors["x"]
-        shift = rng.normal(0.0, 1.0, size=(x.shape[0], 1)).astype(x.dtype)
-        tensors["x"] = (x + shift).astype(x.dtype)
+        if x.ndim != 2:
+            raise ValueError(
+                f"relation {self.name!r} requires a 2-D 'x', got shape {x.shape} "
+                f"in case {base.case_id!r}"
+            )
+        scale = self.scale if self.scale is not None else _overflow_scale(x.dtype)
+        shift = rng.normal(0.0, scale, size=(x.shape[0], 1)).astype(x.dtype)
+        tensors["x"] = x + shift
         return _derived(base, self.name, tensors)
 
 
