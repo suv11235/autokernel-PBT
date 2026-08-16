@@ -51,3 +51,172 @@ L5,multi-agent,2512.23236.pdf,2512.23236,KernelEvolve
 L5,memory-and-retrieval,2510.19873.pdf,2510.19873,ReGraphT
 L5,memory-and-retrieval,2602.14293.pdf,2602.14293,KernelBlaster
 L5,memory-and-retrieval,2603.10846.pdf,2603.10846,EvoKernel
+PBT,foundations,quickcheck-icfp2000.pdf,,QuickCheck: A Lightweight Tool for Random Testing of Haskell Programs (ICFP 2000)
+PBT,foundations,how-to-specify-it-hughes-tfp2019.pdf,,How to Specify It! A Guide to Writing Properties of Pure Functions (Hughes; TFP 2019)
+PBT,foundations,oracle-problem-survey-tse2015.pdf,,The Oracle Problem in Software Testing: A Survey (Barr et al.; TSE 2015)
+PBT,foundations,validating-scientific-code-pbt-scipy2020.pdf,,Falsify Your Software: Validating Scientific Code with Property-Based Testing (SciPy 2020)
+PBT,foundations,hypothesis-joss2019.pdf,,Hypothesis: A New Approach to Property-Based Testing (JOSS 2019)
+PBT,foundations,etna-icfp2023-lampropoulos.pdf,2603.27002,Etna: An Evaluation Platform for Property-Based Testing (ICFP 2023)
+PBT,foundations,2603.27002.pdf,2603.27002,Etna: An Evaluation Platform for Property-Based Testing (arXiv copy)
+PBT,foundations,pbt-in-practice-icse2024.pdf,,Property-Based Testing in Practice (Goldstein et al.; ICSE 2024)
+PBT,foundations,do-judge-a-test-by-its-cover-esop2021.pdf,,Do Judge a Test by its Cover: Combining Combinatorial and Property-Based Testing (ESOP 2021)
+PBT,foundations,2602.18545.pdf,2602.18545,Programmable Property-Based Testing
+PBT,foundations,2606.22616.pdf,2606.22616,Compositional Generator Equivalence
+PBT,foundations,2508.14394.pdf,2508.14394,Tuning Random Generators: Property-Based Testing as Probabilistic Programming
+PBT,foundations,targeted-pbt-issta2017.pdf,,Targeted Property-Based Testing (Loescher and Sagonas; ISSTA 2017)
+PBT,foundations,automating-targeted-pbt-icst2018.pdf,,Automating Targeted Property-Based Testing (ICST 2018)
+PBT,foundations,coverage-guided-pbt-fuzzchick-oopsla2019.pdf,,Coverage Guided Property Based Testing / FuzzChick (OOPSLA 2019)
+PBT,foundations,,,Choosing Properties for Property-Based Testing (Wlaschin; blog) - https://fsharpforfunandprofit.com/posts/property-based-testing-2/
+PBT,metamorphic,2002.12543.pdf,2002.12543,Metamorphic Testing: A New Approach for Generating Next Test Cases (Chen/Cheung/Yiu 1998)
+PBT,metamorphic,metamorphic-testing-survey-tse2016-segura.pdf,,A Survey on Metamorphic Testing (Segura et al.; TSE 2016)
+PBT,metamorphic,metamorphic-testing-untestable-ieee-software-2020-segura.pdf,,Metamorphic Testing: Testing the Untestable (IEEE Software 2020)
+PBT,metamorphic,,,Metamorphic Testing: A Review of Challenges and Opportunities (Chen et al.; ACM CSUR 2018) - PAYWALLED - https://doi.org/10.1145/3143561
+PBT,metamorphic,,,A Miss Is as Good as A Mile: Metamorphic Testing for Deep Learning Operators (FSE 2024) - gold OA but bot-blocked - https://doi.org/10.1145/3660796
+PBT,metamorphic,eagle-icse2022.pdf,,EAGLE: Creating Equivalent Graphs to Test Deep Learning Libraries (ICSE 2022)
+PBT,metamorphic,automr-numerical-metamorphic-relations.pdf,,AutoMR: Automatic Discovery and Cleansing of Numerical Metamorphic Relations (ICSME 2019)
+PBT,metamorphic,2312.15302.pdf,2312.15302,GenMorph: Automatically Generating Metamorphic Relations via Genetic Programming
+PBT,metamorphic,2304.07548.pdf,2304.07548,MR-Scout: Automated Synthesis of Metamorphic Relations from Existing Test Cases (TOSEM 2024)
+PBT,metamorphic,kanewala-predicting-mrs-graph-kernels-stvr2016-preprint.pdf,,Predicting Metamorphic Relations for Testing Scientific Software (Kanewala et al.; STVR 2016)
+PBT,metamorphic,predicting-mrs-matrix-calculation-programs-met2018.pdf,,Predicting Metamorphic Relations for Matrix Calculation Programs (MET 2018)
+PBT,metamorphic,metamorphic-testing-graphics-compilers-met2016-donaldson.pdf,,Metamorphic Testing for (Graphics) Compilers (Donaldson and Lascu; MET 2016)
+PBT,metamorphic,2607.04058.pdf,2607.04058,Kaizen: Metamorphic Fuzzing and Differential Testing for LLM-Translated HPC Applications
+PBT,metamorphic,1804.01954.pdf,1804.01954,Testing Scientific Software: A Systematic Literature Review (Kanewala and Bieman)
+PBT,metamorphic,2406.05397.pdf,2406.05397,Metamorphic Relation Generation: State of the Art and Visions for Future Research
+PBT,metamorphic,2605.13898.pdf,2605.13898,Bidirectional Empowerment of Metamorphic Testing and LLMs: A Systematic Survey
+PBT,metamorphic,2507.22610.pdf,2507.22610,Metamorphic Testing of Deep Code Models: A Systematic Literature Review
+PBT,metamorphic,2606.17529.pdf,2606.17529,Domain-Validity-Gated Metamorphic Testing of Scientific ML Surrogates
+PBT,metamorphic,2605.17437.pdf,2605.17437,A Semantic Mutation Metric for Metamorphic Relation Adequacy in Scientific Computing Programs
+PBT,metamorphic,cradle-icse2019.pdf,,CRADLE: Cross-Backend Validation to Detect and Localize Bugs in Deep Learning Libraries (ICSE 2019)
+PBT,metamorphic,lemon-fse2020.pdf,,LEMON: Deep Learning Library Testing via Effective Model Generation (FSE 2020)
+PBT,metamorphic,2204.08734.pdf,2204.08734,Muffin: Testing Deep Learning Libraries via Neural Architecture Fuzzing (ICSE 2022)
+PBT,metamorphic,2008.05933.pdf,2008.05933,GraphFuzz: Graph-Based Fuzz Testing for Deep Learning Inference Engines (ICSE 2021)
+PBT,shrinking,delta-debugging-zeller-tse2002.pdf,,Simplifying and Isolating Failure-Inducing Input (Zeller and Hildebrandt; TSE 2002)
+PBT,shrinking,hypothesis-reducer-ecoop2020.pdf,,Test-Case Reduction via Test-Case Generation: Insights from the Hypothesis Reducer (ECOOP 2020)
+PBT,shrinking,2608.09935.pdf,2608.09935,Evaluating Shrinking (Experience Report)
+PBT,shrinking,spirv-fuzz-pldi2021.pdf,,Test-Case Reduction and Deduplication Almost for Free with Transformation-Based Compiler Testing (PLDI 2021)
+PBT,shrinking,swarm-testing-issta2012.pdf,,Swarm Testing (Groce et al.; ISSTA 2012)
+PBT,shrinking,,,Integrated versus Manual Shrinking (de Vries; Well-Typed blog 2019) - https://well-typed.com/blog/2019/05/integrated-shrinking/
+PBT,tooling,,,Hypothesis documentation - https://hypothesis.readthedocs.io/
+PBT,tooling,,,Hypothesis Array API extra / Quansight Labs writeup - https://labs.quansight.org/blog/2021/10/hypothesis-array-api
+PBT,tooling,,,jqwik user guide (integrated shrinking) - https://jqwik.net/property-based-testing.html
+PBT,tooling,,,fast-check - https://fast-check.dev/
+PBT,tooling,,,Rust proptest - https://proptest-rs.github.io/proptest/
+PBT,tooling,,,PropEr (Erlang) - https://proper-testing.github.io/
+PBT,tooling,,,torch.testing.assert_close default tolerances - https://docs.pytorch.org/docs/stable/testing.html
+PBT,numerical-fp,goldberg-1991-what-every-cs-should-know-fp.pdf,,What Every Computer Scientist Should Know About Floating-Point Arithmetic (Goldberg; CSUR 1991)
+PBT,numerical-fp,lapack-lawn41-installation-testing-guide.pdf,,LAPACK Working Note 41: Installation Guide for LAPACK (test-ratio convention; THRESH=30)
+PBT,numerical-fp,higham-mary-probabilistic-rounding-error-analysis-simax2019.pdf,,A New Approach to Probabilistic Rounding Error Analysis (Higham and Mary; SISC 2019)
+PBT,numerical-fp,higham-mary-sharper-probabilistic-backward-error-simax2020.pdf,,Sharper Probabilistic Backward Error Analysis for BLAS Kernels with Random Data (SISC 2020)
+PBT,numerical-fp,fasi-higham-mikaitis-pranesh-numerical-behavior-nvidia-tensor-cores-2020.pdf,,Numerical Behavior of NVIDIA Tensor Cores (PeerJ CS 2021)
+PBT,numerical-fp,blanchard-higham-mixed-precision-block-fma-tensor-cores-sisc2020.pdf,,Mixed Precision Block Fused Multiply-Add: Error Analysis and Application to GPU Tensor Cores (SISC 2020)
+PBT,numerical-fp,2209.05433.pdf,2209.05433,FP8 Formats for Deep Learning
+PBT,numerical-fp,ocp-8bit-floating-point-specification-ofp8-r1.0.pdf,,OCP 8-bit Floating Point Specification (OFP8) Revision 1.0
+PBT,numerical-fp,demmel-ahrens-nguyen-reproducible-summation-toms2020.pdf,,Algorithms for Efficient Reproducible Floating Point Summation (ACM TOMS 2020)
+PBT,numerical-fp,demmel-nguyen-fast-reproducible-fp-summation-arith2013.pdf,,Fast Reproducible Floating-Point Summation (ARITH-21 2013)
+PBT,numerical-fp,flit-iiswc2017-cross-platform-fp-consistency.pdf,,FLiT: Cross-Platform Floating-Point Result-Consistency Tester and Workload (IISWC 2017)
+PBT,numerical-fp,1811.05618.pdf,1811.05618,Multi-Level Analysis of Compiler-Induced Variability and Performance Tradeoffs
+PBT,numerical-fp,varity-ipdps2020-laguna.pdf,,Varity: Quantifying Floating-Point Variations in HPC Systems Through Randomized Testing (IPDPS 2020)
+PBT,numerical-fp,2410.09172.pdf,2410.09172,Testing GPU Numerics: Finding Numerical Differences Between NVIDIA and AMD GPUs
+PBT,numerical-fp,testing-gpu-numerics-nvidia-amd-scw2024.pdf,,Testing GPU Numerics: NVIDIA vs AMD (conference version)
+PBT,numerical-fp,herbie-pldi2015-panchekha.pdf,,Automatically Improving Accuracy for Floating Point Expressions / Herbie (PLDI 2015)
+PBT,numerical-fp,croci-fasi-higham-mikaitis-stochastic-rounding-rsos2022.pdf,,Stochastic Rounding: Implementation Error Analysis and Applications (RSOS 2022)
+PBT,numerical-fp,1509.01347.pdf,1509.01347,Verificarlo: Checking Floating Point Accuracy through Monte Carlo Arithmetic (ARITH 2016)
+PBT,numerical-fp,cadna-round-off-error-propagation-jezequel-chesneaux.pdf,,CADNA: A Library for Estimating Round-Off Error Propagation
+PBT,numerical-fp,numerical-bug-characteristics-ase2017.pdf,,A Comprehensive Study of Real-World Numerical Bug Characteristics (ASE 2017)
+PBT,numerical-fp,muller-on-the-definition-of-ulp-inria-rr5504.pdf,,On the Definition of ulp(x) (Muller; INRIA RR-5504)
+PBT,numerical-fp,precimonious-sc2013-rubio-gonzalez.pdf,,Precimonious: Tuning Assistant for Floating-Point Precision (SC 2013)
+PBT,numerical-fp,rubio-gonzalez-icse2020-error-inducing-fp-inputs.pdf,,Efficient Generation of Error-Inducing Floating-Point Inputs via Symbolic Execution (ICSE 2020)
+PBT,numerical-fp,fpbench-nsv2016-damouche.pdf,,Toward a Standard Benchmark Format and Suite for Floating-Point Analysis / FPBench (NSV 2016)
+PBT,numerical-fp,,,Accuracy and Stability of Numerical Algorithms (Higham; SIAM 2002) - COPYRIGHTED BOOK - https://nhigham.com/accuracy-and-stability-of-numerical-algorithms/
+PBT,numerical-fp,,,Handbook of Floating-Point Arithmetic 2nd ed (Muller et al.; Birkhauser 2018) - COPYRIGHTED BOOK - https://inria.hal.science/hal-01766584
+PBT,numerical-fp,,,Intel oneMKL Conditional Numerical Reproducibility - https://www.intel.com/content/www/us/en/docs/onemkl/developer-guide-linux/2023-0/obtaining-numerically-reproducible-results.html
+PBT,numerical-fp,,,Predoo: Precision Testing of Deep Learning Operators (ISSTA 2021) - PAYWALLED - https://doi.org/10.1145/3460319.3464843
+PBT,compiler-gpu,csmith-pldi2011.pdf,,Finding and Understanding Bugs in C Compilers / Csmith (PLDI 2011)
+PBT,compiler-gpu,emi-orion-pldi2014.pdf,,Compiler Validation via Equivalence Modulo Inputs / Orion (PLDI 2014)
+PBT,compiler-gpu,athena-oopsla2015.pdf,,Finding Deep Compiler Bugs via Guided Stochastic Program Mutation / Athena (OOPSLA 2015)
+PBT,compiler-gpu,hermes-live-code-mutation-oopsla2016.pdf,,Finding Compiler Bugs via Live Code Mutation / Hermes (OOPSLA 2016)
+PBT,compiler-gpu,compiler-testing-survey-csur2020.pdf,,A Survey of Compiler Testing (Chen et al.; ACM CSUR 2020)
+PBT,compiler-gpu,1810.02718.pdf,1810.02718,Compiler Testing: A Systematic Literature Analysis (bibliometric)
+PBT,compiler-gpu,sun-compiler-bug-study-issta2016.pdf,,Toward Understanding Compiler Bugs in GCC and LLVM (ISSTA 2016)
+PBT,compiler-gpu,clsmith-many-core-compiler-fuzzing-pldi2015.pdf,,Many-Core Compiler Fuzzing / CLsmith (PLDI 2015)
+PBT,compiler-gpu,cudasmith-compsac2020.pdf,,CUDAsmith: A Fuzzer for CUDA Compilers (COMPSAC 2020)
+PBT,compiler-gpu,gpuverify-oopsla2012.pdf,,GPUVerify: A Verifier for GPU Kernels (OOPSLA 2012)
+PBT,compiler-gpu,graphicsfuzz-oopsla2017.pdf,,Automated Testing of Graphics Shader Compilers / GraphicsFuzz (OOPSLA 2017)
+PBT,compiler-gpu,graphicsfuzz-production-ecoop2020.pdf,,Putting Randomized Compiler Testing into Production (ECOOP 2020)
+PBT,compiler-gpu,graphicsfuzz-industrial-deployment-icst2023.pdf,,Industrial Deployment of Compiler Fuzzing Techniques for Two GPU Shading Languages (ICST 2023)
+PBT,compiler-gpu,cufuzz-oopsla2026-nvidia.pdf,,Hunting CUDA Bugs at Scale with cuFuzz (OOPSLA 2026)
+PBT,compiler-gpu,2601.01048.pdf,2601.01048,CuFuzz (Georgia Tech; name collision with NVIDIA cuFuzz)
+PBT,compiler-gpu,2603.05725.pdf,2603.05725,Challenges and Design Considerations for Finding CUDA Bugs Through GPU-Native Fuzzing
+PBT,compiler-gpu,2601.21552.pdf,2601.21552,Chasing Elusive Memory Bugs in GPU Programs
+PBT,compiler-gpu,2605.19652.pdf,2605.19652,Characterizing Real-World Bugs in Tile Programs for Automated Bug Detection (ISSTA 2026)
+PBT,compiler-gpu,2511.12638.pdf,2511.12638,Equivalence Checking of ML GPU Kernels / VOLTA
+PBT,compiler-gpu,1905.01833.pdf,1905.01833,Characterizing and Detecting CUDA Program Bugs / Simulee (ICSE 2020)
+PBT,compiler-gpu,simulee-icse2020-cuda-sync-bugs.pdf,,Simulee: Detecting CUDA Synchronization Bugs (ICSE 2020 conference version)
+PBT,compiler-gpu,2207.13066.pdf,2207.13066,NNSmith: Generating Diverse and Valid Test Cases for Deep Learning Compilers (ASPLOS 2023)
+PBT,compiler-gpu,2202.09947.pdf,2202.09947,Tzer: Coverage-Guided Tensor Compiler Fuzzing with Joint IR-Pass Mutation (OOPSLA 2022)
+PBT,compiler-gpu,2201.06589.pdf,2201.06589,FreeFuzz: Fuzzing Deep-Learning Libraries from Open Source (ICSE 2022)
+PBT,compiler-gpu,deeprel-fse2022.pdf,,DeepREL: Fuzzing Deep-Learning Libraries via Automated Relational API Inference (FSE 2022)
+PBT,compiler-gpu,2212.14834.pdf,2212.14834,TitanFuzz: Large Language Models are Zero-Shot Fuzzers (ISSTA 2023)
+PBT,compiler-gpu,2304.02014.pdf,2304.02014,FuzzGPT: Large Language Models are Edge-Case Generators (ICSE 2024)
+PBT,compiler-gpu,2310.15991.pdf,2310.15991,WhiteFox: White-Box Compiler Fuzzing Empowered by Large Language Models (OOPSLA 2024)
+PBT,compiler-gpu,2208.02193.pdf,2208.02193,HirGen: Fuzzing Deep Learning Compilers via High-Level IR Generation (ISSTA 2023)
+PBT,compiler-gpu,2310.20078.pdf,2310.20078,TorchProbe: Fuzzing Dynamic Deep Learning Compilers
+PBT,compiler-gpu,2404.16947.pdf,2404.16947,Fuzzing MLIR Compilers with Custom Mutation Synthesis
+PBT,compiler-gpu,dlcompiler-bugs-study-fse2021.pdf,,A Comprehensive Study of Deep Learning Compiler Bugs (FSE 2021)
+PBT,compiler-gpu,ptx-memory-model-asplos2019.pdf,,A Formal Analysis of the NVIDIA PTX Memory Consistency Model (ASPLOS 2019)
+PBT,compiler-gpu,gpu-concurrency-weak-behaviours-asplos2015.pdf,,GPU Concurrency: Weak Behaviours and Programming Assumptions (ASPLOS 2015)
+PBT,compiler-gpu,weak-memory-gpu-errors-pldi2016.pdf,,Exposing Errors Related to Weak Memory in GPU Applications (PLDI 2016)
+PBT,compiler-gpu,iguard-sosp2021.pdf,,iGUARD: In-GPU Advanced Race Detection (SOSP 2021)
+PBT,compiler-gpu,scord-isca2020.pdf,,ScoRD: A Scoped Race Detector for GPUs (ISCA 2020)
+PBT,compiler-gpu,ld-taco2017-gpu-race-detection.pdf,,LD: Low-Overhead GPU Race Detection Without Access Monitoring (ACM TACO 2017)
+PBT,compiler-gpu,ldetector-wodet2014.pdf,,LDetector (WoDet 2014 workshop version)
+PBT,compiler-gpu,2111.12478.pdf,2111.12478,Predictive Data Race Detection for GPUs (2-page poster)
+PBT,compiler-gpu,2604.02106.pdf,2604.02106,Accurate GPU Race Detection Using Host-Code Context
+PBT,compiler-gpu,2505.20207.pdf,2505.20207,GPUMC: Stateless Model Checking for GPU Weak Memory Concurrency
+PBT,compiler-gpu,gklee-ppopp2012.pdf,,GKLEE: Concolic Verification and Test Generation for GPUs (PPoPP 2012)
+PBT,compiler-gpu,esbmc-gpu-scp2017.pdf,,ESBMC-GPU: Verifying CUDA Programs Using Bounded Model Checking (SCP 2017)
+PBT,compiler-gpu,,,NVIDIA Compute Sanitizer documentation - https://docs.nvidia.com/compute-sanitizer/ComputeSanitizer/index.html
+PBT,compiler-gpu,,,AWS NKI simulate_kernel and baremetal docs - https://awsdocs-neuron.readthedocs-hosted.com/en/latest/nki/
+PBT,evaluation,1808.09700.pdf,1808.09700,Evaluating Fuzz Testing (Klees et al.; CCS 2018)
+PBT,evaluation,hitchhikers-guide-statistical-tests-stvr2014.pdf,,A Hitchhikers Guide to Statistical Tests for Assessing Randomized Algorithms in SE (STVR 2014)
+PBT,evaluation,mutants-valid-substitute-real-faults-fse2014.pdf,,Are Mutants a Valid Substitute for Real Faults in Software Testing? (FSE 2014)
+PBT,evaluation,mutation-scores-real-fault-detection-icse2018.pdf,,Are Mutation Scores Correlated with Real Fault Detection? (ICSE 2018)
+PBT,evaluation,is-mutation-appropriate-tool-icse2005.pdf,,Is Mutation an Appropriate Tool for Testing Experiments? (ICSE 2005)
+PBT,evaluation,mutation-testing-advances-survey-2019.pdf,,Mutation Testing Advances: An Analysis and Survey (Advances in Computers 2019)
+PBT,evaluation,jia-harman-mutation-survey-crest-tr-09-06.pdf,,An Analysis and Survey of the Development of Mutation Testing (Jia and Harman; TSE 2011 CREST preprint)
+PBT,evaluation,defects4j-issta2014.pdf,,Defects4J: A Database of Existing Faults to Enable Controlled Testing Studies (ISSTA 2014)
+PBT,evaluation,2504.17977.pdf,2504.17977,From Bugs to Benchmarks: A Comprehensive Survey of Software Defect Datasets
+PBT,evaluation,lessons-static-analysis-google-cacm2018.pdf,,Lessons from Building Static Analysis Tools at Google (CACM 2018)
+PBT,evaluation,tyche-pbt-effectiveness-uist2024.pdf,,Tyche: Making Sense of Property-Based Testing Effectiveness (UIST 2024)
+PBT,evaluation,2307.04346.pdf,2307.04346,Can Large Language Models Write Good Property-Based Tests?
+PBT,evaluation,,,An Investigation on Numerical Bugs in GPU Programs (ISSTA 2025) - PAYWALLED - https://doi.org/10.1145/3728950
+PBT,evaluation,,,BugsInPy: A Database of Existing Bugs in Python Programs (FSE 2020) - PAYWALLED - https://doi.org/10.1145/3368089.3417943
+PBT,llm-kernel-prior-art,2606.20128.pdf,2606.20128,The Correctness Illusion in LLM-Generated GPU Kernels
+PBT,llm-kernel-prior-art,2606.27396.pdf,2606.27396,Test-Input Generation for Tensor Programs: What Actually Finds Kernel Bugs
+PBT,llm-kernel-prior-art,2608.12700.pdf,2608.12700,A Contract-Grade Verifier for LLM-Generated GPU Kernels
+PBT,llm-kernel-prior-art,2604.22032.pdf,2604.22032,Kernel Contracts: A Specification Language for ML Kernel Correctness Across Heterogeneous Silicon
+PBT,llm-kernel-prior-art,2606.06747.pdf,2606.06747,Tensor Algebraic Property Skeletons: Amplifying Property-Based Testing for AI Compilers (Propilot)
+PBT,llm-kernel-prior-art,2607.05031.pdf,2607.05031,LLM-Based Test Oracles: Source-of-Authority Taxonomy - A Systematic Literature Review
+PBT,llm-kernel-prior-art,2604.18616.pdf,2604.18616,ARGUS: Agentic GPU Optimization Guided by Data-Flow Invariants
+PBT,llm-kernel-prior-art,2511.12294.pdf,2511.12294,ProofWright: Towards Agentic Formal Verification of CUDA
+PBT,llm-kernel-prior-art,2607.16241.pdf,2607.16241,KernelBench-Verified
+PBT,llm-kernel-prior-art,2607.04395.pdf,2607.04395,NKI-Agent (AWS Trainium kernel generation)
+PBT,llm-kernel-prior-art,2506.18315.pdf,2506.18315,Property-Generated Solver: Property-Based Testing to Bridge LLM Code Generation and Validation
+PBT,llm-kernel-prior-art,2510.25297.pdf,2510.25297,Understanding the Characteristics of LLM-Generated Property-Based Tests in Exploring Edge Cases
+PBT,llm-kernel-prior-art,2510.09907.pdf,2510.09907,Agentic Property-Based Testing: Finding Bugs Across the Python Ecosystem
+PBT,llm-kernel-prior-art,2406.06864.pdf,2406.06864,Validating LLM-Generated Programs with Metamorphic Prompt Testing
+PBT,llm-kernel-prior-art,2401.17019.pdf,2401.17019,Towards Generating Executable Metamorphic Relations Using Large Language Models
+PBT,llm-kernel-prior-art,2310.01831.pdf,2310.01831,nl2postcond: Transforming Natural Language Intent into Formal Method Postconditions (FSE 2024)
+PBT,llm-kernel-prior-art,2405.03786.pdf,2405.03786,TOGLL: Correct and Strong Test Oracle Generation with LLMs (ICSE 2025)
+PBT,llm-kernel-prior-art,2408.15815.pdf,2408.15815,MR-Adopt: Automatic Deduction of Input Transformations
+PBT,llm-kernel-prior-art,2305.01210.pdf,2305.01210,EvalPlus: Is Your Code Generated by ChatGPT Really Correct?
+PBT,llm-kernel-prior-art,2207.10397.pdf,2207.10397,CodeT: Code Generation with Generated Tests
+PBT,llm-kernel-prior-art,2305.14591.pdf,2305.14591,ALGO: Synthesizing Algorithmic Programs with LLM-Generated Oracle Verifiers
+PBT,llm-kernel-prior-art,2502.10517.pdf,2502.10517,KernelBench (local copy; also indexed under L2)
+PBT,llm-kernel-prior-art,2502.14752.pdf,2502.14752,TritonBench (local copy; also indexed under L2)
+PBT,llm-kernel-prior-art,2509.14279.pdf,2509.14279,Towards Robust Agentic CUDA Kernel Benchmarking and Verification (local copy; also indexed under L2)
+PBT,llm-kernel-prior-art,2601.15727.pdf,2601.15727,Survey: Automated Kernel Generation in the Era of LLMs (local copy; also indexed under L0)
+PBT,llm-kernel-prior-art,,,Sakana AI CUDA Engineer reward-hacking statement - https://x.com/SakanaAILabs/status/1892992938013270019
+PBT,antithesis,,,Antithesis: Property-Based Testing - https://antithesis.com/docs/resources/property_based_testing/
+PBT,antithesis,,,Antithesis: Assertions (always / alwaysOrUnreachable / sometimes / reachable / unreachable) - https://antithesis.com/docs/concepts/properties_assertions/assertions/
+PBT,antithesis,,,Antithesis: Deterministic Simulation Testing - https://antithesis.com/docs/resources/deterministic_simulation_testing/

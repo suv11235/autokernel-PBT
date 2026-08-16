@@ -29,6 +29,7 @@ while IFS=, read -r level sublevel filename arxiv_id title; do
         memory-and-retrieval) dir="$dir/L5-advanced-topics/memory-and-retrieval" ;;
       esac
       ;;
+    PBT) dir="$dir/PBT-property-based-testing/papers" ;;
   esac
   mkdir -p "$dir"
   out="$dir/$filename"
