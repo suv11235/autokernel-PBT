@@ -49,7 +49,7 @@ from autokernel_pbt.props.properties import (
     ShiftInvariance,
     ValuesInUnitInterval,
 )
-from autokernel_pbt.props.table import ExecutionTable
+from autokernel_pbt.props.table import ExecutionTable, _json_safe
 from autokernel_pbt.props.tasks import REFERENCES, TASKS
 from autokernel_pbt.props.verdict import Verdict
 
@@ -221,8 +221,19 @@ def canonical_telemetry(telemetry: dict[str, Any]) -> Any:
     rather than on corruption, so both sides are pushed through the same encoding
     first. This keeps telemetry *witnessed* — an arm that clobbers it is still
     caught — while not asserting a fidelity the ledger never promised.
+
+    ``_json_safe`` is imported from the ledger rather than approximated here, and
+    the private name is the point: this must be the *same* encoder, not a
+    plausible one. An earlier version passed ``default=str``, which stringifies a
+    numpy scalar where ``_json_safe`` calls ``.item()`` on it. A Phase 3 backend
+    reporting ``{"sm_occupancy": np.float32(0.75)}`` — precisely the case
+    ``_json_safe``'s docstring was written for, and one ``test_table.py``
+    certifies as supported — would then have failed this criterion on a run with
+    zero corruption, reporting a fairness violation that never happened. A false
+    failure here is worse than a missed one: it would be debugged as the thing it
+    is not.
     """
-    return json.loads(json.dumps(telemetry, sort_keys=True, default=str))
+    return json.loads(json.dumps(telemetry, sort_keys=True, default=_json_safe))
 
 
 def row_fingerprint(row: ExecutionResult) -> tuple[Any, ...]:
@@ -296,8 +307,7 @@ def declarative_oracle() -> DeclarativeOracle:
 
 def arm_verdicts(oracle: Any, table: ExecutionTable) -> dict[str, Verdict]:
     return {
-        group_id: summary(oracle.evaluate(rows))
-        for group_id, rows in table.read_groups().items()
+        group_id: summary(oracle.evaluate(rows)) for group_id, rows in table.read_groups().items()
     }
 
 
@@ -359,9 +369,7 @@ def assert_replay_fairness(run_dir: Path) -> None:
 
     executed = executed_rows(results)
     assert executed, "the recorded run is empty; there is nothing to be fair about"
-    assert table_fingerprint(table) == executed, (
-        "the persisted rows are not what was executed"
-    )
+    assert table_fingerprint(table) == executed, "the persisted rows are not what was executed"
 
     first = table_fingerprint(table)
     second = table_fingerprint(ExecutionTable(run_dir))
@@ -380,12 +388,9 @@ def assert_replay_fairness(run_dir: Path) -> None:
     assert rows_fingerprint(shared) == before, "the reference arm mutated the rows it was handed"
 
     declarative_verdicts = {
-        group_id: summary(declarative_oracle().evaluate(rows))
-        for group_id, rows in shared.items()
+        group_id: summary(declarative_oracle().evaluate(rows)) for group_id, rows in shared.items()
     }
-    assert rows_fingerprint(shared) == before, (
-        "the declarative arm mutated the rows it was handed"
-    )
+    assert rows_fingerprint(shared) == before, "the declarative arm mutated the rows it was handed"
 
     # Both arms must actually have judged every recorded group, or "same rows" is
     # a statement about rows nobody scored.
@@ -509,8 +514,53 @@ def _drift_one_ulp(row: ExecutionResult) -> None:
     row.case.tensors["x"] = x
 
 
-def _zero_outputs(row: ExecutionResult) -> None:
-    row.outputs = {name: np.zeros_like(array) for name, array in row.outputs.items()}
+def _every_read(corrupt: Callable[[ExecutionResult], None]):
+    """A read-path saboteur that corrupts identically on every call.
+
+    The fixed-point attacks: no amount of re-reading and comparing can see them,
+    so only the executed-rows fidelity witness catches them.
+    """
+
+    def factory():
+        def apply(rows: list[ExecutionResult]) -> None:
+            for row in rows:
+                corrupt(row)
+
+        return apply
+
+    return factory
+
+
+def _from_read(index: int, corrupt: Callable[[ExecutionResult], None]):
+    """A read path that corrupts only from the ``index``-th call onward.
+
+    This models a *non-deterministic* read — the realistic shape of a caching bug,
+    a partial write, or a racing reader — and it is what pins the criterion's
+    remaining assertions. Each of stability, shared-read-equals-disk and the
+    post-scoring re-read was individually deletable with zero test failures,
+    because every saboteur written before this one was caught by an earlier
+    assertion and none modelled a table that changes under you.
+
+    Coupled, deliberately, to the exact read sequence in ``assert_replay_fairness``:
+    (1) fidelity, (2) ``first``, (3) ``second``, (4) ``shared``, (5) the final
+    re-read. Adding a read there will mis-target these, and they will say so —
+    each asserts the *message* it expects, so a drifted index fails loudly rather
+    than passing against the wrong assertion.
+    """
+
+    def factory():
+        state = {"reads": 0}
+
+        def apply(rows: list[ExecutionResult]) -> None:
+            state["reads"] += 1
+            if state["reads"] < index:
+                return
+            for row in rows:
+                corrupt(row)
+
+        return apply
+
+    return factory
 
 
 #: Corruptions injected into an *arm*, i.e. one oracle sabotaging the rows the
@@ -539,26 +589,47 @@ SABOTAGED_ARMS = {
     "declarative": DeclarativeOracle,
 }
 
-#: Corruptions injected into the *read path*, applied identically on every call.
-#: These are the fixed-point attacks: no amount of re-reading and comparing can
-#: see them, so they are caught only by the executed-rows fidelity witness.
+#: Corruptions injected into the *read path*, each paired with the assertion that
+#: must catch it. Pairing is what makes these pin individual lines: without it a
+#: saboteur caught by an earlier assertion silently certifies a later one it never
+#: reached, which is how three assertions here stayed deletable through two
+#: reviews.
 READ_SABOTEURS = {
-    "read_drifts_one_ulp": _drift_one_ulp,
-    "read_promotes_dtype": _promote_input_dtype,
-    "read_repairs_outputs": _repair_outputs,
-    "read_zeroes_outputs": _zero_outputs,
+    "read_drifts_one_ulp": (_every_read(_drift_one_ulp), "not what was executed"),
+    "read_promotes_dtype": (_every_read(_promote_input_dtype), "not what was executed"),
+    "read_repairs_outputs": (_every_read(_repair_outputs), "not what was executed"),
+    "read_replaces_outputs": (_every_read(_replace_outputs), "not what was executed"),
+    "read_drifts_after_the_fidelity_check": (
+        _from_read(3, _drift_one_ulp),
+        "differ between reads",
+    ),
+    "read_drifts_only_for_the_shared_read": (
+        _from_read(4, _drift_one_ulp),
+        "shared read differs from the table on disk",
+    ),
+    "read_drifts_only_on_the_final_reread": (
+        _from_read(5, _drift_one_ulp),
+        "scoring changed the persisted table",
+    ),
 }
 
 
 @pytest.mark.parametrize("arm", sorted(SABOTAGED_ARMS))
 @pytest.mark.parametrize("name", sorted(ARM_SABOTEURS))
 def test_an_arm_that_corrupts_rows_is_caught(tmp_path: Path, monkeypatch, name: str, arm: str):
-    """Each saboteur must break REPLAY_FAIRNESS, from either arm.
+    """Each saboteur must break REPLAY_FAIRNESS, from either arm, and be blamed on it.
 
     Sabotaging the first arm is the higher-damage case — everything it corrupts is
     then scored by the second arm as if it were the recorded execution — but it is
-    not the only one that must be caught, and testing only it leaves the second
-    arm's assertion unguarded against deletion.
+    not the only one that must be caught.
+
+    ``match`` pins *attribution*, not merely detection, and that is what keeps both
+    assertions alive. The declarative arm's check runs after both arms over the
+    same shared objects, so it subsumes the reference arm's: with a bare
+    ``pytest.raises`` the reference assertion was deletable with zero failures —
+    the same defect the previous round fixed for the declarative arm, relocated
+    rather than closed. Requiring the message to name the sabotaged arm makes each
+    assertion the only one that can satisfy its own cases.
     """
     corrupt = ARM_SABOTEURS[name]
     cls = SABOTAGED_ARMS[arm]
@@ -570,24 +641,53 @@ def test_an_arm_that_corrupts_rows_is_caught(tmp_path: Path, monkeypatch, name: 
         return original(self, rows)
 
     monkeypatch.setattr(cls, "evaluate", evaluate)
-    with pytest.raises(AssertionError):
+    with pytest.raises(AssertionError, match=f"the {arm} arm mutated"):
         assert_replay_fairness(tmp_path / "run")
 
 
 @pytest.mark.parametrize("name", sorted(READ_SABOTEURS))
 def test_a_read_path_that_corrupts_rows_is_caught(tmp_path: Path, monkeypatch, name: str):
-    corrupt = READ_SABOTEURS[name]
+    """Each read-path saboteur must break the criterion, at its named assertion.
+
+    The four fixed-point saboteurs are caught by the fidelity witness; the three
+    late-onset ones are each caught by exactly one of the assertions that no
+    earlier saboteur reached.
+    """
+    factory, expected = READ_SABOTEURS[name]
+    corrupt = factory()
     original = ExecutionTable.read
 
     def read(self):
         rows = original(self)
-        for row in rows:
-            corrupt(row)
+        corrupt(rows)
         return rows
 
     monkeypatch.setattr(ExecutionTable, "read", read)
-    with pytest.raises(AssertionError):
+    with pytest.raises(AssertionError, match=expected):
         assert_replay_fairness(tmp_path / "run")
+
+
+def test_numpy_typed_telemetry_does_not_manufacture_a_fairness_violation(
+    tmp_path: Path, monkeypatch
+):
+    """A clean run must stay clean when a backend reports numpy-typed telemetry.
+
+    ``table.py`` supports this deliberately — ``_json_safe`` exists for it and
+    ``test_table.py`` certifies it — so a Phase 3 backend reporting an
+    ``np.float32`` occupancy counter is a *correct* backend. If this module's
+    telemetry canonicalizer disagreed with the ledger's encoder, that correct
+    backend would fail REPLAY_FAIRNESS with no corruption anywhere, and the
+    failure would be investigated as a fairness violation that never happened.
+    """
+    original = NumpyBackend._telemetry
+
+    def telemetry(self, start):
+        recorded = original(self, start)
+        recorded["sm_occupancy"] = np.float32(0.75)
+        return recorded
+
+    monkeypatch.setattr(NumpyBackend, "_telemetry", telemetry)
+    assert_replay_fairness(tmp_path / "run")
 
 
 def test_a_repairing_arm_would_actually_destroy_detections(tmp_path: Path):
@@ -612,7 +712,9 @@ def test_a_repairing_arm_would_actually_destroy_detections(tmp_path: Path):
     after = {gid: summary(declarative.evaluate(rows)) for gid, rows in repaired.items()}
     still_failing = {gid for gid, v in after.items() if v is Verdict.FAIL}
 
-    assert still_failing < honest_failures, "the repair must destroy detections to be worth guarding"
+    assert still_failing < honest_failures, (
+        "the repair must destroy detections to be worth guarding"
+    )
 
 
 # --------------------------------------------------------------------------- #

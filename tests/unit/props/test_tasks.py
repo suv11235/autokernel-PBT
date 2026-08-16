@@ -121,6 +121,15 @@ def test_softmax_reference_needs_max_subtraction_not_just_float64():
     This scale is beyond what ``ShiftRows`` generates today, and that is the point:
     it isolates the property rather than the operating point, so a future relation
     with a wider scale — or an fp64 task — cannot silently lose it.
+
+    How a regression actually surfaces, stated precisely because the obvious
+    reading is off by one step: under this project's ``filterwarnings = ["error"]``
+    numpy's overflow ``RuntimeWarning`` is raised inside ``np.exp`` before any
+    assertion runs, so a non-max-subtracting reference fails here as an *error*,
+    not as the finiteness assertion below. That assertion is the backstop for a
+    caller that has suppressed numpy's error state — which ``ReferenceOracle``
+    does — and it is why the check is worth keeping rather than relying on the
+    warning alone.
     """
     x = np.array([[3.0e38, 1.0]], dtype=np.float32)
     out = softmax_reference(x)
