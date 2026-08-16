@@ -22,10 +22,18 @@ if [ "${1:-}" = "-F" ] && [ -n "${2:-}" ]; then
 else
   git interpret-trailers --parse <<<"" >/dev/null 2>&1 || true
   : > "$MSG_FILE"
+  FIRST_M=1
   while [ $# -gt 0 ]; do
     case "$1" in
       -m)
         shift
+        # git itself separates -m paragraphs with a blank line. Without this the body
+        # is glued onto the subject, so `git log --oneline` prints the whole message
+        # as one line and every tool that reads a subject sees the entire commit.
+        if [ "$FIRST_M" -eq 0 ]; then
+          printf '\n' >> "$MSG_FILE"
+        fi
+        FIRST_M=0
         printf '%s\n' "$1" >> "$MSG_FILE"
         ;;
       *)
