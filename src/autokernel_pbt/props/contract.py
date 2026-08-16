@@ -23,6 +23,13 @@ miss, in the very comparison the project exists to make. There is no runtime sig
 for any of them, so they are rejected here, at load or build time, before any
 hardware is touched. Each rejection names what it rejected and why, and
 ``tests/unit/props/test_contract.py`` pins each to its own message.
+
+A KNOWN LIMIT of the format, stated so it is not mistaken for a gap: a description
+that disagrees with the property it sits above is accepted. The description is the
+human half and nothing here can check prose against code, so the two are held to
+their separate standards — the property tuple is pinned by test, and the prose is
+reviewed by a person. What the loader guarantees is only that both halves are
+*present* and that the machine half is real.
 """
 
 from __future__ import annotations
@@ -53,6 +60,13 @@ PROPERTY_CHECK = "property"
 #: loader does not know about would certify an empty set.
 KERNEL_TASKS_DIR = Path("kernels") / "tasks"
 CONTRACT_FILENAME = "acceptance.yaml"
+
+#: The contract format this loader understands. Both feature specs and kernel
+#: contracts carry a ``version:``, and it is *read* here rather than merely written:
+#: a version key nobody validates reads as a compatibility guarantee the loader does
+#: not provide, so a file from a future format would be parsed under today's rules
+#: and quietly lose whatever the new version added. Omitting the key means version 1.
+CONTRACT_VERSION = 1
 
 _REQUIRED_CRITERION_KEYS = ("id", "description", "check")
 
@@ -122,7 +136,20 @@ def _criterion_from(path: Path, task_id: str, raw: Any) -> Criterion:
         )
         raise ValueError(msg)
 
-    criterion_id = str(raw["id"])
+    # str() is deliberately NOT applied before the check. A bare ``id:`` key parses to
+    # YAML ``None``, and ``str(None)`` is the perfectly non-empty ``"None"`` — so a
+    # coerce-then-validate order walks straight past the single most likely way to
+    # write a blank id, and worse, gives two blank ids the same fake name so they
+    # collide under the duplicate-id check as if the author had meant it.
+    criterion_id = raw["id"]
+    if not isinstance(criterion_id, str) or not criterion_id.strip():
+        msg = (
+            f"contract {path} for task {task_id!r} has a criterion with a blank id "
+            f"({criterion_id!r}); a criterion with no id is not traceable to an "
+            f"obligation, and a bare 'id:' key parses as None rather than as text"
+        )
+        raise ValueError(msg)
+
     check = raw["check"]
     if not isinstance(check, dict):
         msg = f"contract {path} criterion {criterion_id!r} has a check that is not a mapping"
@@ -142,12 +169,17 @@ def _criterion_from(path: Path, task_id: str, raw: Any) -> Criterion:
         )
         raise ValueError(msg)
 
-    description = str(raw["description"])
-    if not description.strip():
+    # Same trap as ``id``, and this is the field it matters most for: a bare
+    # ``description:`` key is exactly how an author who skipped the prose writes it,
+    # and ``str(None) == "None"`` would sail through a strip-only guard — leaving the
+    # guard blind to the one authoring slip it exists to catch.
+    description = raw["description"]
+    if not isinstance(description, str) or not description.strip():
         msg = (
-            f"contract {path} criterion {criterion_id!r} has an empty description; the "
-            f"description is the spec half of the contract, and without it the file is a "
-            f"property list rather than a statement about the kernel"
+            f"contract {path} criterion {criterion_id!r} has an empty description "
+            f"({description!r}); the description is the spec half of the contract, and "
+            f"without it the file is a property list rather than a statement about the "
+            f"kernel"
         )
         raise ValueError(msg)
 
@@ -186,6 +218,15 @@ def load_contract(path: Path | str) -> Contract:
         msg = (
             f"contract {path} declares no task_id; a contract naming no task cannot be "
             f"joined to the corpus it is meant to score"
+        )
+        raise ValueError(msg)
+
+    version = document.get("version", CONTRACT_VERSION)
+    if version != CONTRACT_VERSION:
+        msg = (
+            f"contract {path} for task {task_id!r} declares version {version!r}; this "
+            f"loader understands only version {CONTRACT_VERSION}, and parsing a future "
+            f"format under today's rules would silently drop whatever it added"
         )
         raise ValueError(msg)
 

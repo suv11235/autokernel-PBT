@@ -16,12 +16,23 @@ rejection is pinned here by a test that matches its own message.
 That last part is the invariant this suite is built to satisfy, and it is stronger
 than "every validation has a test": every validation is the *unique* catcher for at
 least one test. Verified by deleting each in turn and re-running this module — each
-of the ten (not-a-mapping, task_id, empty criteria, duplicate ids, duplicate
-property, missing criterion key, unknown check type, empty description, unknown
-property, deferral) fails exactly its own case or cases and nothing else. The one
-deliberate exception is ``validate_property_set``'s empty-set guard, which this
-module cannot reach at all because ``load_contract`` rejects an empty ``criteria``
-list first; it is pinned in ``test_oracle.py``, where it is reachable.
+of the thirteen (not-a-mapping, task_id, version, empty criteria, duplicate ids,
+duplicate property, missing criterion key, unknown check type, blank id, empty
+description, unknown property, deferral, one-contract-per-task) fails exactly its
+own case or cases and nothing else.
+
+Two of those guards are also pinned against a specific *ordering* regression rather
+than only against deletion. ``id`` and ``description`` are type-checked before they
+are coerced, because a bare ``id:`` or ``description:`` key parses to YAML ``None``
+and ``str(None)`` is the perfectly non-empty ``"None"`` — reinstating the coerce-
+first order leaves both guards in place and still walks past the blank-key tests
+below. A guard can be defeated by moving a ``str()`` call, so the tests assert the
+behaviour rather than the presence of the line.
+
+The one deliberate exception to the unique-catcher rule is
+``validate_property_set``'s empty-set guard, which this module cannot reach at all
+because ``load_contract`` rejects an empty ``criteria`` list first; it is pinned in
+``test_oracle.py``, where it is reachable.
 
 ``test_the_contract_is_what_catches_the_bug`` is the load-bearing one: it proves
 the file is not decorative by deleting a criterion from a copy of it and watching
@@ -39,6 +50,9 @@ import yaml
 
 from autokernel_pbt.props.backends.numpy_backend import NumpyBackend
 from autokernel_pbt.props.contract import (
+    CONTRACT_FILENAME,
+    CONTRACT_VERSION,
+    KERNEL_TASKS_DIR,
     PROPERTY_CHECK,
     Contract,
     Criterion,
@@ -97,6 +111,10 @@ def _contract_file(tmp_path: Path, names: list[str], **overrides: Any) -> Path:
     }
     document.update(overrides)
     return _write(tmp_path / "acceptance.yaml", document)
+
+
+def _document(path: Path) -> Any:
+    return yaml.safe_load(path.read_text())
 
 
 def _softmax_contract(repo_root: Path) -> Contract:
@@ -182,6 +200,30 @@ def test_every_contract_on_disk_names_registered_properties_and_builds_an_oracle
         assert oracle.case_properties or oracle.group_properties
 
 
+def _assert_contracts_and_tasks_are_in_step(root: Path) -> None:
+    """D, factored out so a duplicate-contract saboteur can be run against it.
+
+    The one-contract-per-task assertion comes *first* and is stated over the path
+    list rather than the dict. Keying by ``task_id`` is lossy: two contracts
+    claiming one task collapse to a single entry, so ``contracts.keys() ==
+    TASKS.keys()`` stays True and the surviving path — whichever sorts last — also
+    satisfies the directory-name check. A second contract for softmax could then sit
+    in the tree indefinitely, and which of the two a future driver scored would
+    depend on how it happened to iterate.
+    """
+    paths = contract_paths(root)
+    contracts = {load_contract(path).task_id: path for path in paths}
+    assert len(contracts) == len(paths), (
+        f"two contracts claim one task_id; {len(paths)} files collapsed to "
+        f"{sorted(contracts)} ({[str(p) for p in paths]})"
+    )
+    assert contracts.keys() == TASKS.keys()
+    for task_id, path in contracts.items():
+        assert path.parent.name == task_id, (
+            f"{path} declares task_id {task_id!r} but lives under {path.parent.name!r}"
+        )
+
+
 def test_contracts_and_tasks_are_in_step(repo_root: Path):
     """D: every task has a contract and every contract names a task.
 
@@ -190,12 +232,25 @@ def test_contracts_and_tasks_are_in_step(repo_root: Path):
     no contract has no declarative arm at all, and a contract naming no task
     describes a corpus that is never generated.
     """
-    contracts = {load_contract(path).task_id: path for path in contract_paths(repo_root)}
-    assert contracts.keys() == TASKS.keys()
-    for task_id, path in contracts.items():
-        assert path.parent.name == task_id, (
-            f"{path} declares task_id {task_id!r} but lives under {path.parent.name!r}"
-        )
+    _assert_contracts_and_tasks_are_in_step(repo_root)
+
+
+def test_a_second_contract_claiming_one_task_is_caught(repo_root: Path, tmp_path: Path):
+    """The duplicate must be caught wherever it sorts, not only after the real one.
+
+    The copy is named so it sorts *before* ``softmax``, which is the case a
+    dict-keyed check misses: the real directory would overwrite the impostor's entry
+    and every assertion downstream would pass.
+    """
+    root = tmp_path / "root"
+    for path in contract_paths(repo_root):
+        _write(root / KERNEL_TASKS_DIR / path.parent.name / CONTRACT_FILENAME, _document(path))
+    _assert_contracts_and_tasks_are_in_step(root)
+
+    softmax = repo_root / KERNEL_TASKS_DIR / "softmax" / CONTRACT_FILENAME
+    _write(root / KERNEL_TASKS_DIR / "aaa_copy" / CONTRACT_FILENAME, _document(softmax))
+    with pytest.raises(AssertionError, match="two contracts claim one task_id"):
+        _assert_contracts_and_tasks_are_in_step(root)
 
 
 def test_contract_properties_split_across_the_two_scopes(repo_root: Path):
@@ -372,6 +427,73 @@ def test_a_criterion_with_no_description_is_rejected(tmp_path: Path):
     }
     with pytest.raises(ValueError, match="empty description"):
         load_contract(_write(tmp_path / "acceptance.yaml", document))
+
+
+def test_a_bare_description_key_is_rejected(tmp_path: Path):
+    """The blank description an author actually writes: ``description:`` and nothing.
+
+    YAML parses that as ``None``, and ``str(None)`` is the perfectly non-empty
+    ``"None"`` — so a guard that coerced before stripping would accept it and record
+    a criterion whose spec half reads "None". The guard exists precisely for the
+    author who skipped the prose, so missing this case would leave it guarding only
+    the deliberate whitespace nobody types.
+    """
+    document = {
+        "task_id": "softmax",
+        "criteria": [
+            {
+                "id": "FINITE_OUTPUT",
+                "description": None,
+                "check": {"type": PROPERTY_CHECK, "property": OutputsAreFinite.name},
+            }
+        ],
+    }
+    with pytest.raises(ValueError, match="empty description"):
+        load_contract(_write(tmp_path / "acceptance.yaml", document))
+
+
+def test_a_bare_id_key_is_rejected(tmp_path: Path):
+    """The same trap on ``id``, where it additionally defeats the duplicate check.
+
+    Two criteria written with a bare ``id:`` both become ``"None"`` under coercion —
+    non-empty, and *equal*, so they collide under the duplicate-id check as though
+    the author had deliberately reused a name. The reported error would then be
+    about duplication rather than about the two missing ids, pointing the fix at the
+    wrong place.
+    """
+    blank = {
+        "id": None,
+        "description": "a law with no traceable id",
+        "check": {"type": PROPERTY_CHECK, "property": OutputsAreFinite.name},
+    }
+    document = {"task_id": "softmax", "criteria": [blank, {**blank, "check": dict(blank["check"])}]}
+    with pytest.raises(ValueError, match="blank id"):
+        load_contract(_write(tmp_path / "acceptance.yaml", document))
+
+
+def test_an_unknown_contract_version_is_rejected(tmp_path: Path):
+    """``version:`` is read, not merely written.
+
+    An unvalidated version key reads as a compatibility guarantee the loader does
+    not provide: a file written against a future format would be parsed under
+    today's rules, silently losing whatever that format added.
+    """
+    path = _contract_file(tmp_path, [OutputsAreFinite.name], version=CONTRACT_VERSION + 98)
+    with pytest.raises(ValueError, match="declares version"):
+        load_contract(path)
+
+
+def test_an_omitted_version_means_version_one(tmp_path: Path):
+    document = {
+        "task_id": "softmax",
+        "criteria": [_criterion(OutputsAreFinite.name)],
+    }
+    assert load_contract(_write(tmp_path / "acceptance.yaml", document)).task_id == "softmax"
+
+
+def test_the_contracts_on_disk_declare_the_version_the_loader_understands(repo_root: Path):
+    for path in contract_paths(repo_root):
+        assert _document(path)["version"] == CONTRACT_VERSION
 
 
 def test_duplicate_criterion_ids_are_rejected(tmp_path: Path):
