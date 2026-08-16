@@ -1,0 +1,21 @@
+# Acceptance contract for the relu task.
+#
+# One criterion, and the shortness is a claim rather than an omission. Relu's output
+# is unbounded above, so `values_in_unit_interval` would FAIL a correct kernel; its
+# rows do not sum to one, so `rows_sum_to_one` would too; and its domain declares no
+# relations, so `shift_invariance` would never find a partner and would return
+# INCONCLUSIVE forever, adding groups that established nothing to the denominator of
+# the detection rate. The measured cost of getting this wrong is asserted in
+# tests/integration/test_record_replay.py::test_relu_uses_only_the_properties_relu_actually_obeys.
+#
+# This is also the authoring-cost floor for the declarative arm: one line of spec is
+# what a simple elementwise kernel is worth.
+task_id: relu
+version: 1
+
+criteria:
+  - id: FINITE_OUTPUT
+    description: no output element is NaN or Inf, on any input the domain generates
+    check:
+      type: property
+      property: outputs_are_finite

@@ -1,0 +1,39 @@
+# Acceptance contract for the softmax task.
+#
+# This file IS the declarative oracle: `oracle_from_contract` builds the property
+# set from the criteria below, so adding or removing a criterion here changes what
+# the arm can catch. `tests/unit/props/test_contract.py::test_the_contract_is_what_
+# catches_the_bug` demonstrates that by deleting ROW_SUMS from a copy and watching
+# an unnormalized softmax go undetected.
+#
+# FINITE_OUTPUT is not optional bookkeeping. UNIT_INTERVAL and ROW_SUMS both decline
+# to report non-finite output so that one defect is counted once, deferring it to
+# FINITE_OUTPUT; a contract selecting them without it would abstain on every NaN and
+# record a clean miss, which is why the loader rejects that combination.
+task_id: softmax
+version: 1
+
+criteria:
+  - id: FINITE_OUTPUT
+    description: no output element is NaN or Inf, on any input the domain generates
+    check:
+      type: property
+      property: outputs_are_finite
+
+  - id: UNIT_INTERVAL
+    description: every output element is a probability, lying in [0, 1] exactly
+    check:
+      type: property
+      property: values_in_unit_interval
+
+  - id: ROW_SUMS
+    description: each row of the output sums to one within its dtype's rounding budget
+    check:
+      type: property
+      property: rows_sum_to_one
+
+  - id: SHIFT_INVARIANCE
+    description: adding a per-row constant to the input leaves the output unchanged
+    check:
+      type: property
+      property: shift_invariance
