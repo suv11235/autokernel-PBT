@@ -131,6 +131,31 @@ def _json_safe(obj: Any) -> Any:
     raise TypeError(msg)
 
 
+def _conform(record: dict[str, Any], schema: pa.Schema) -> dict[str, Any]:
+    """`pa.Table.from_pylist` presence-checks nothing: a missing key becomes a
+    fully-null column indistinguishable from an honest unlabelled run, and an
+    extra key is dropped. A typo therefore corrupts a metric silently.
+
+    Only the value *types* are checked by the schema, so this is the one place a
+    key set can be caught. It is the builder's invariant, not the writer's — the
+    read-side column check cannot see this failure at all, because the file it
+    receives has every column present and merely lies about one.
+
+    The difference is symmetric on purpose: a typo such as `kernel_is_borken`
+    produces one missing key *and* one unexpected one, and naming only the
+    missing half sends the reader looking for a deletion that never happened.
+    """
+    expected = set(schema.names)
+    if record.keys() != expected:
+        msg = (
+            f"record does not match the schema; missing: "
+            f"{sorted(expected - record.keys())}, unexpected: "
+            f"{sorted(record.keys() - expected)}"
+        )
+        raise ValueError(msg)
+    return record
+
+
 class ExecutionTable:
     """Read/write the recorded executions for one run."""
 
@@ -215,9 +240,13 @@ class ExecutionTable:
         # `ExecutionResult.error` is declared `str = ""`; a None from a caller
         # that skipped the default must not widen the column's contract.
         record["error"] = result.error or ""
-        record["kernel_id"] = result.kernel_id
+        # Declared `str = ""`, same as `error` above: a None from a caller that
+        # skipped the default must not widen a str-typed column, or a downstream
+        # `.startswith(...)` becomes an AttributeError and None groups apart
+        # from "".
+        record["kernel_id"] = result.kernel_id or ""
         record["kernel_is_broken"] = result.kernel_is_broken
-        return record
+        return _conform(record, SCHEMA)
 
     def read(self) -> list[ExecutionResult]:
         """Every recorded execution, in write order. `[]` if the run is absent.
@@ -227,10 +256,8 @@ class ExecutionTable:
         a build whose status vocabulary has since changed, which every oracle
         downstream would otherwise silently misclassify.
 
-        A table missing columns this build requires raises for the same reason,
-        and is not backfilled: a default would be indistinguishable from a
-        recorded value, which is exactly what `kernel_is_broken`'s tri-state
-        exists to prevent.
+        A table missing columns this build requires raises for the same reason;
+        see `_require_columns`.
         """
         if not self.metadata_path.exists():
             return []
@@ -284,11 +311,12 @@ class ExecutionTable:
         directory nor the reason. There is no recorded corpus, so old tables are
         not supported — but the refusal has to say so.
         """
-        missing = [name for name in SCHEMA.names if name not in set(present)]
+        available = set(present)
+        missing = [name for name in SCHEMA.names if name not in available]
         if missing:
             msg = (
                 f"{self.metadata_path} was written by a build with a different schema; "
-                f"missing columns: {missing}"
+                f"missing columns: {missing}. There is no migration: re-record this run."
             )
             raise ValueError(msg)
 

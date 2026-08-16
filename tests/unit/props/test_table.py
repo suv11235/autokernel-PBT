@@ -1,12 +1,13 @@
 """ExecutionTable round-trip tests."""
 
 import numpy as np
+import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
 from autokernel_pbt.props.backends.base import ExecutionResult, Status
 from autokernel_pbt.props.case import Case
-from autokernel_pbt.props.table import ExecutionTable
+from autokernel_pbt.props.table import SCHEMA, ExecutionTable, _conform
 
 
 def _result(case_id: str, group_id: str = "g0", relation: str = "base") -> ExecutionResult:
@@ -583,3 +584,55 @@ def test_read_rejects_a_table_written_before_the_kernel_columns_existed(tmp_path
 
     with pytest.raises(ValueError, match=r"different schema.*kernel_id.*kernel_is_broken"):
         ExecutionTable(run).read()
+
+
+def test_a_record_missing_a_schema_key_is_rejected_before_anything_is_written():
+    """A builder that drops a key must fail, not write a silently-null column.
+
+    `pa.Table.from_pylist` presence-checks nothing, so the omission would produce
+    a *complete* file whose column reads back all-None — indistinguishable from an
+    honest unlabelled run, and invisible to the read-side column check. This is
+    the only place that failure is catchable.
+    """
+    with pytest.raises(ValueError, match=r"missing: \['kernel_is_broken'\]"):
+        _conform({name: "" for name in SCHEMA.names if name != "kernel_is_broken"}, SCHEMA)
+
+
+def test_a_record_with_a_mistyped_key_names_both_halves():
+    """A typo is one missing key and one unexpected key; naming only the missing
+    half sends the reader looking for a deletion that never happened."""
+    record = {name: "" for name in SCHEMA.names}
+    record["kernel_is_borken"] = record.pop("kernel_is_broken")
+
+    with pytest.raises(
+        ValueError,
+        match=r"missing: \['kernel_is_broken'\].*unexpected: \['kernel_is_borken'\]",
+    ):
+        _conform(record, SCHEMA)
+
+
+def test_the_builder_actually_applies_the_schema_check(tmp_path, monkeypatch):
+    """`_record` must route through `_conform`, not merely coexist with it.
+
+    Testing `_conform` directly leaves the wiring uncovered: deleting the call
+    from `_record` keeps every other test green, because every record the current
+    builder produces is well-formed. Widening `SCHEMA` without teaching `_record`
+    the new column is exactly the Task 2 mistake this guard exists to catch, so
+    that is the mutation applied here.
+    """
+    widened = pa.schema([*SCHEMA, pa.field("arm", pa.string())])
+    monkeypatch.setattr("autokernel_pbt.props.table.SCHEMA", widened)
+
+    with pytest.raises(ValueError, match=r"missing: \['arm'\]"):
+        ExecutionTable(tmp_path / "run").write([_result("c0")])
+
+
+def test_a_none_kernel_id_does_not_widen_the_string_column(tmp_path):
+    """`kernel_id` is declared `str = ""`; a caller that skipped the default must
+    not put a None into a str-typed column, where a downstream `.startswith(...)`
+    becomes an AttributeError and None groups apart from "".
+    """
+    result = _result("c0")
+    result.kernel_id = None
+    ExecutionTable(tmp_path / "run").write([result])
+    assert ExecutionTable(tmp_path / "run").read()[0].kernel_id == ""
