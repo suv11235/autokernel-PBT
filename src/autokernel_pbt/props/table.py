@@ -82,6 +82,11 @@ SCHEMA = pa.schema(
         ("telemetry", pa.string()),
         ("status", pa.string()),
         ("error", pa.string()),
+        # Ground truth join keys. `kernel_is_broken` is nullable on purpose: a
+        # null means "not stated", False means "stated correct". See
+        # `ExecutionResult` for why the two must not collapse.
+        ("kernel_id", pa.string()),
+        ("kernel_is_broken", pa.bool_()),
     ]
 )
 
@@ -210,6 +215,8 @@ class ExecutionTable:
         # `ExecutionResult.error` is declared `str = ""`; a None from a caller
         # that skipped the default must not widen the column's contract.
         record["error"] = result.error or ""
+        record["kernel_id"] = result.kernel_id
+        record["kernel_is_broken"] = result.kernel_is_broken
         return record
 
     def read(self) -> list[ExecutionResult]:
@@ -219,11 +226,18 @@ class ExecutionTable:
         string or a placeholder. That is deliberate: it means a table written by
         a build whose status vocabulary has since changed, which every oracle
         downstream would otherwise silently misclassify.
+
+        A table missing columns this build requires raises for the same reason,
+        and is not backfilled: a default would be indistinguishable from a
+        recorded value, which is exactly what `kernel_is_broken`'s tri-state
+        exists to prevent.
         """
         if not self.metadata_path.exists():
             return []
+        table = pq.read_table(self.metadata_path)
+        self._require_columns(table.schema.names)
         results = []
-        for record in pq.read_table(self.metadata_path).to_pylist():
+        for record in table.to_pylist():
             payload = load_file(str(self._tensor_path(record["case_id"])))
             inputs = {
                 key[len(INPUT_PREFIX) :]: value
@@ -256,9 +270,27 @@ class ExecutionTable:
                     # indistinguishable from a freshly executed one.
                     status=self._status(record["status"], record["case_id"]),
                     error=record["error"],
+                    kernel_id=record["kernel_id"],
+                    kernel_is_broken=record["kernel_is_broken"],
                 )
             )
         return results
+
+    def _require_columns(self, present: list[str]) -> None:
+        """Reject a table written by a build with a narrower schema.
+
+        Without this the first missing column surfaces as a bare `KeyError:
+        'kernel_id'` from inside the row loop, which names neither the run
+        directory nor the reason. There is no recorded corpus, so old tables are
+        not supported — but the refusal has to say so.
+        """
+        missing = [name for name in SCHEMA.names if name not in set(present)]
+        if missing:
+            msg = (
+                f"{self.metadata_path} was written by a build with a different schema; "
+                f"missing columns: {missing}"
+            )
+            raise ValueError(msg)
 
     def _status(self, value: str, case_id: str) -> Status:
         try:

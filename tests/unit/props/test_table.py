@@ -1,6 +1,7 @@
 """ExecutionTable round-trip tests."""
 
 import numpy as np
+import pyarrow.parquet as pq
 import pytest
 
 from autokernel_pbt.props.backends.base import ExecutionResult, Status
@@ -502,3 +503,83 @@ def test_case_id_with_relation_separator_round_trips(tmp_path):
     row = ExecutionTable(tmp_path / "run1").read()[0]
     assert row.case.case_id == "softmax-g00000-base::shift_rows"
     _assert_identical(row.outputs["y"], np.full((2, 3), 0.25, dtype=np.float32))
+
+
+# --- Criterion KERNEL_IDENTITY: ground truth on the row ---
+
+
+def test_kernel_identity_round_trips(tmp_path):
+    """A row must say which kernel produced it and whether that kernel was broken.
+
+    Without both, a detection rate cannot be computed from the table: nothing joins
+    a verdict to the ground truth about the kernel under test.
+    """
+    result = _result("c0")
+    result.kernel_id = "softmax_missing_max_subtraction"
+    result.kernel_is_broken = True
+    ExecutionTable(tmp_path / "run").write([result])
+
+    row = ExecutionTable(tmp_path / "run").read()[0]
+    assert row.kernel_id == "softmax_missing_max_subtraction"
+    assert row.kernel_is_broken is True
+
+
+def test_kernel_identity_defaults_are_recorded_not_guessed(tmp_path):
+    """An unlabelled kernel round-trips as unlabelled, never as a silent False.
+
+    `kernel_is_broken=None` means "ground truth not stated"; False means "stated
+    correct". Collapsing the two would silently enlarge the correct-kernel
+    denominator of the false-positive rate.
+    """
+    ExecutionTable(tmp_path / "run").write([_result("c0")])
+    row = ExecutionTable(tmp_path / "run").read()[0]
+    assert row.kernel_id == ""
+    assert row.kernel_is_broken is None
+
+
+def test_kernel_is_broken_keeps_all_three_states_in_one_batch(tmp_path):
+    """True, False and None must stay distinct through Parquet, in one column.
+
+    `pa.bool_()` is nullable, but a mixed batch is where a null would most
+    plausibly collapse into False, or a False into a null. Either direction moves
+    a row between the numerator and the denominator of a rate with no error, so
+    all three states are asserted by identity rather than truthiness.
+    """
+    broken = _result("c0")
+    broken.kernel_id = "softmax_missing_max_subtraction"
+    broken.kernel_is_broken = True
+    correct = _result("c1")
+    correct.kernel_id = "softmax_reference"
+    correct.kernel_is_broken = False
+    unlabelled = _result("c2")
+    unlabelled.kernel_id = "softmax_unknown"
+
+    ExecutionTable(tmp_path / "run").write([broken, correct, unlabelled])
+
+    rows = ExecutionTable(tmp_path / "run").read()
+    assert [row.kernel_id for row in rows] == [
+        "softmax_missing_max_subtraction",
+        "softmax_reference",
+        "softmax_unknown",
+    ]
+    assert rows[0].kernel_is_broken is True
+    assert rows[1].kernel_is_broken is False
+    assert rows[2].kernel_is_broken is None
+
+
+def test_read_rejects_a_table_written_before_the_kernel_columns_existed(tmp_path):
+    """A narrower table must be refused by name, not backfilled and not a KeyError.
+
+    Backfilling `kernel_is_broken` would forge ground truth: the default is
+    indistinguishable from a recorded value. A bare `KeyError: 'kernel_id'` from
+    inside the row loop names neither the run directory nor the cause.
+    """
+    run = tmp_path / "run"
+    ExecutionTable(run).write([_result("c0")])
+    narrowed = pq.read_table(run / "rows.parquet").drop_columns(
+        ["kernel_id", "kernel_is_broken"]
+    )
+    pq.write_table(narrowed, run / "rows.parquet")
+
+    with pytest.raises(ValueError, match=r"different schema.*kernel_id.*kernel_is_broken"):
+        ExecutionTable(run).read()
