@@ -1,0 +1,56 @@
+feature_id: "0005"
+feature_name: measurable-runs
+version: 1
+
+criteria:
+  - id: KERNEL_IDENTITY
+    description: a recorded row identifies which kernel produced it and whether it was broken
+    check:
+      type: unit_test
+      test: tests/unit/props/test_table.py::test_kernel_identity_round_trips
+
+  - id: SCORES_PERSIST
+    description: property results survive a round trip and rejoin their execution rows
+    check:
+      type: unit_test
+      test: tests/unit/props/test_scores.py::test_scores_round_trip_and_rejoin_their_rows
+
+  - id: ARM_ATTRIBUTION
+    description: each persisted result records which oracle arm produced it
+    check:
+      type: unit_test
+      test: tests/unit/props/test_scores.py::test_each_result_records_its_arm
+
+  - id: ORACLE_COST_RECORDED
+    description: each arm's evaluation time is recorded so cost-per-bug is derivable
+    check:
+      type: unit_test
+      test: tests/unit/props/test_scores.py::test_arm_elapsed_is_recorded
+
+  - id: ONE_DRIVER
+    description: the driver composes the pipeline and both arms score the same recorded corpus
+    check:
+      type: unit_test
+      test: tests/integration/test_driver.py::test_both_arms_score_the_same_recorded_corpus
+
+  - id: DETECTION_IS_DERIVABLE
+    description: a detection rate can be computed from the persisted artifacts alone
+    check:
+      type: unit_test
+      test: tests/integration/test_driver.py::test_detection_rate_is_computable_from_disk
+
+  - id: JOIN_IS_VERIFIED
+    description: >-
+      the driver refuses to report a rate when the scores do not join the recorded rows;
+      DETECTION_IS_DERIVABLE only requires the number be computable, not correct, and
+      neither table carries a run identity, so a scores file from another run, a mistyped
+      case_id, or an execution table rewritten after scoring all read clean today
+    check:
+      type: unit_test
+      test: tests/integration/test_driver.py::test_scores_that_do_not_join_the_recorded_rows_are_refused
+
+  - id: CONTRACT_DRIVES_THE_ARM
+    description: the driver builds the declarative arm from the kernel contract, not a hardcoded set
+    check:
+      type: unit_test
+      test: tests/integration/test_driver.py::test_the_declarative_arm_comes_from_the_contract

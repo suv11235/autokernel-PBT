@@ -343,6 +343,38 @@ own instrumentation, not only in the kernels under test. Second, any detection-r
 produced by this harness should be accompanied by the saboteur matrix that establishes the
 harness could have failed.
 
+## 6.6 First artifact-derived numbers, and a warning about the headline claim
+
+The first detection rate computed **purely from the persisted Parquet files**, with no package
+import, on `SOFTMAX` at 9 groups:
+
+| kernel | declarative | reference | hybrid |
+|---|---|---|---|
+| `unnormalized_softmax` (broken) | 0.778 | 0.778 | 0.778 |
+| `naive_overflow` (broken) | 0.222 | 0.222 | 0.222 |
+| correct | FP rate 0.000 | 0.000 | 0.000 |
+
+The 0.778 is 7/9, and the two misses recovered from disk are shapes `[1, 1]` and `[17, 1]` —
+exactly the single-column rungs `_LADDER_SHAPES` documents as a blind spot, where an unnormalized
+softmax is *genuinely correct*. An artifact-derived number independently reproducing a claim that
+had only been asserted in prose is the strongest evidence so far that the join works.
+
+**Two warnings this surfaced.**
+
+**The tolerance-free split is currently vacuous.** On `unnormalized_softmax`, the declarative arm
+produced 36 `tolerance_free=True` rows and **zero** failures; every detection came from
+tolerance-dependent properties. The design's sharpest claim — "bugs found without a tolerance
+argument" — scores **0/9** on this corpus. That is a corpus and property-catalogue finding, not a
+schema gap: the current tolerance-free properties (finiteness, unit interval) simply do not
+constrain this particular defect. Either the catalogue needs tolerance-free properties that bite
+on normalization errors, or the claim needs restating against a corpus where it holds. It must not
+be reported until one of those happens.
+
+**The unit of analysis changes the answer and is not recorded.** Rolled up per *group*, the
+declarative arm scores 0.778; per *result*, 0.519 (14/27), because the arms emit different numbers
+of results per group and only the group rollup is arm-comparable. Nothing on disk states which
+unit a number used. Any reported rate must name its unit, and the driver should fix it explicitly.
+
 ## 7. Evaluation
 
 Metrics, in the order they become measurable:

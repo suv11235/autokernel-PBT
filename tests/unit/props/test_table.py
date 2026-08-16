@@ -1,11 +1,13 @@
 """ExecutionTable round-trip tests."""
 
 import numpy as np
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 
 from autokernel_pbt.props.backends.base import ExecutionResult, Status
 from autokernel_pbt.props.case import Case
-from autokernel_pbt.props.table import ExecutionTable
+from autokernel_pbt.props.table import SCHEMA, ExecutionTable, _conform
 
 
 def _result(case_id: str, group_id: str = "g0", relation: str = "base") -> ExecutionResult:
@@ -502,3 +504,209 @@ def test_case_id_with_relation_separator_round_trips(tmp_path):
     row = ExecutionTable(tmp_path / "run1").read()[0]
     assert row.case.case_id == "softmax-g00000-base::shift_rows"
     _assert_identical(row.outputs["y"], np.full((2, 3), 0.25, dtype=np.float32))
+
+
+# --- Criterion KERNEL_IDENTITY: ground truth on the row ---
+
+
+def test_kernel_identity_round_trips(tmp_path):
+    """A row must say which kernel produced it and whether that kernel was broken.
+
+    Without both, a detection rate cannot be computed from the table: nothing joins
+    a verdict to the ground truth about the kernel under test.
+    """
+    result = _result("c0")
+    result.kernel_id = "softmax_missing_max_subtraction"
+    result.kernel_is_broken = True
+    ExecutionTable(tmp_path / "run").write([result])
+
+    row = ExecutionTable(tmp_path / "run").read()[0]
+    assert row.kernel_id == "softmax_missing_max_subtraction"
+    assert row.kernel_is_broken is True
+
+
+def test_kernel_identity_defaults_are_recorded_not_guessed(tmp_path):
+    """An unlabelled kernel round-trips as unlabelled, never as a silent False.
+
+    `kernel_is_broken=None` means "ground truth not stated"; False means "stated
+    correct". Collapsing the two would silently enlarge the correct-kernel
+    denominator of the false-positive rate.
+    """
+    ExecutionTable(tmp_path / "run").write([_result("c0")])
+    row = ExecutionTable(tmp_path / "run").read()[0]
+    assert row.kernel_id == ""
+    assert row.kernel_is_broken is None
+
+
+def test_kernel_is_broken_keeps_all_three_states_in_one_batch(tmp_path):
+    """True, False and None must stay distinct through Parquet, in one column.
+
+    `pa.bool_()` is nullable, but a mixed batch is where a null would most
+    plausibly collapse into False, or a False into a null. Either direction moves
+    a row between the numerator and the denominator of a rate with no error, so
+    all three states are asserted by identity rather than truthiness.
+    """
+    broken = _result("c0")
+    broken.kernel_id = "softmax_missing_max_subtraction"
+    broken.kernel_is_broken = True
+    correct = _result("c1")
+    correct.kernel_id = "softmax_reference"
+    correct.kernel_is_broken = False
+    unlabelled = _result("c2")
+    unlabelled.kernel_id = "softmax_unknown"
+
+    ExecutionTable(tmp_path / "run").write([broken, correct, unlabelled])
+
+    rows = ExecutionTable(tmp_path / "run").read()
+    assert [row.kernel_id for row in rows] == [
+        "softmax_missing_max_subtraction",
+        "softmax_reference",
+        "softmax_unknown",
+    ]
+    assert rows[0].kernel_is_broken is True
+    assert rows[1].kernel_is_broken is False
+    assert rows[2].kernel_is_broken is None
+
+
+def test_read_rejects_a_table_written_before_the_kernel_columns_existed(tmp_path):
+    """A narrower table must be refused by name, not backfilled and not a KeyError.
+
+    Backfilling `kernel_is_broken` would forge ground truth: the default is
+    indistinguishable from a recorded value. A bare `KeyError: 'kernel_id'` from
+    inside the row loop names neither the run directory nor the cause.
+    """
+    run = tmp_path / "run"
+    ExecutionTable(run).write([_result("c0")])
+    narrowed = pq.read_table(run / "rows.parquet").drop_columns(
+        ["kernel_id", "kernel_is_broken"]
+    )
+    pq.write_table(narrowed, run / "rows.parquet")
+
+    with pytest.raises(ValueError, match=r"different schema.*kernel_id.*kernel_is_broken"):
+        ExecutionTable(run).read()
+
+
+def test_a_record_missing_a_schema_key_is_rejected_before_anything_is_written():
+    """A builder that drops a key must fail, not write a silently-null column.
+
+    `pa.Table.from_pylist` presence-checks nothing, so the omission would produce
+    a *complete* file whose column reads back all-None — indistinguishable from an
+    honest unlabelled run, and invisible to the read-side column check. This is
+    the only place that failure is catchable.
+    """
+    with pytest.raises(ValueError, match=r"missing: \['kernel_is_broken'\]"):
+        _conform({name: "" for name in SCHEMA.names if name != "kernel_is_broken"}, SCHEMA)
+
+
+def test_a_record_with_a_mistyped_key_names_both_halves():
+    """A typo is one missing key and one unexpected key; naming only the missing
+    half sends the reader looking for a deletion that never happened."""
+    record = {name: "" for name in SCHEMA.names}
+    record["kernel_is_borken"] = record.pop("kernel_is_broken")
+
+    with pytest.raises(
+        ValueError,
+        match=r"missing: \['kernel_is_broken'\].*unexpected: \['kernel_is_borken'\]",
+    ):
+        _conform(record, SCHEMA)
+
+
+def test_the_builder_actually_applies_the_schema_check(tmp_path, monkeypatch):
+    """`_record` must route through `_conform`, not merely coexist with it.
+
+    Testing `_conform` directly leaves the wiring uncovered: deleting the call
+    from `_record` keeps every other test green, because every record the current
+    builder produces is well-formed. Widening `SCHEMA` without teaching `_record`
+    the new column is exactly the Task 2 mistake this guard exists to catch, so
+    that is the mutation applied here.
+    """
+    widened = pa.schema([*SCHEMA, pa.field("arm", pa.string())])
+    monkeypatch.setattr("autokernel_pbt.props.table.SCHEMA", widened)
+
+    with pytest.raises(ValueError, match=r"missing: \['arm'\]"):
+        ExecutionTable(tmp_path / "run").write([_result("c0")])
+
+
+def test_a_none_kernel_id_does_not_widen_the_string_column(tmp_path):
+    """`kernel_id` is declared `str = ""`; a caller that skipped the default must
+    not put a None into a str-typed column, where a downstream `.startswith(...)`
+    becomes an AttributeError and None groups apart from "".
+    """
+    result = _result("c0")
+    result.kernel_id = None
+    ExecutionTable(tmp_path / "run").write([result])
+    assert ExecutionTable(tmp_path / "run").read()[0].kernel_id == ""
+
+
+# --- Corpus identity ----------------------------------------------------------
+
+
+def test_the_corpus_fingerprint_is_stamped_on_every_row(tmp_path):
+    """One identity per write, broadcast to the whole table.
+
+    Per-row rather than in a side table because Parquet dictionary-encodes a
+    single-valued string column to almost nothing, and a side table would cost a
+    join to save that nothing.
+    """
+    run = tmp_path / "run"
+    ExecutionTable(run).write([_result("c0"), _result("c1")])
+
+    stamped = pq.read_table(run / "rows.parquet").column("corpus_fingerprint").to_pylist()
+    assert len(set(stamped)) == 1
+    assert stamped[0] == ExecutionTable(run).corpus_fingerprint()
+    assert stamped[0], "an empty fingerprint would pair with anything"
+
+
+def test_re_recording_the_same_cases_mints_a_new_corpus_identity(tmp_path):
+    """The defence against the worst attack, and why this is not a pure hash.
+
+    Case ids are a pure function of `(seed, index)`, so a re-record — the normal
+    workflow after fixing a kernel — produces byte-for-byte the same id set while
+    recording entirely different executions. A content-derived fingerprint would be
+    identical across the two, and the *previous* run's scores would still appear to
+    belong to the new table. The per-write uuid is what separates them.
+    """
+    run = tmp_path / "run"
+    ExecutionTable(run).write([_result("c0")])
+    first = ExecutionTable(run).corpus_fingerprint()
+    ExecutionTable(run).write([_result("c0")])
+    second = ExecutionTable(run).corpus_fingerprint()
+
+    assert first and second
+    assert first != second, "a re-record kept the old corpus identity"
+
+
+def test_a_different_case_set_gets_a_different_fingerprint(tmp_path):
+    """The other half: the identity is also a statement about what is in the table."""
+    one = tmp_path / "one"
+    two = tmp_path / "two"
+    ExecutionTable(one).write([_result("c0")])
+    ExecutionTable(two).write([_result("c0"), _result("c1")])
+    assert ExecutionTable(one).corpus_fingerprint() != ExecutionTable(two).corpus_fingerprint()
+
+
+def test_a_table_carrying_two_corpus_fingerprints_is_refused(tmp_path):
+    """`write` broadcasts one value, so two means a file assembled from two runs.
+
+    Picking either would certify half a table as the whole of it.
+    """
+    run = tmp_path / "run"
+    ExecutionTable(run).write([_result("c0"), _result("c1")])
+    table = pq.read_table(run / "rows.parquet")
+    patched = table.set_column(
+        table.schema.get_field_index("corpus_fingerprint"),
+        "corpus_fingerprint",
+        pa.array(["aaa", "bbb"], type=pa.string()),
+    )
+    pq.write_table(patched, run / "rows.parquet")
+
+    with pytest.raises(ValueError, match="different corpus"):
+        ExecutionTable(run).corpus_fingerprint()
+
+
+def test_a_run_with_no_rows_has_no_corpus_fingerprint(tmp_path):
+    """`""` means "unstated"; every pairing check must refuse it rather than match it."""
+    assert ExecutionTable(tmp_path / "nope").corpus_fingerprint() == ""
+    empty = tmp_path / "empty"
+    ExecutionTable(empty).write([])
+    assert ExecutionTable(empty).corpus_fingerprint() == ""

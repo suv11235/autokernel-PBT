@@ -74,6 +74,12 @@ class ExecutionResult:
     telemetry: dict[str, Any] = field(default_factory=dict)
     status: Status = Status.OK
     error: str = ""
+    # Ground truth about the kernel that produced this row. kernel_is_broken is
+    # tri-state on purpose: None means "not stated", False means "stated correct".
+    # Collapsing them would silently enlarge the correct-kernel denominator of the
+    # false-positive rate.
+    kernel_id: str = ""
+    kernel_is_broken: bool | None = None
 
 
 class Backend(Protocol):

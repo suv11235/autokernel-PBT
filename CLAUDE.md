@@ -67,7 +67,9 @@ Do not rediscover these.
 | `residual_ratio` takes an explicit `n=` | The default is the last-axis length, which is **wrong** for an already-reduced array. Pass the reduction length from the input. |
 | Normalization is `max(log2(n), 1.0)` | Linear `n` is the bound for *sequential* accumulation; these backends reduce pairwise. Under linear `n` the reference arm missed bugs `np.allclose` catches. |
 | `ExactDtypeError` is caught narrowly → `INCONCLUSIVE` | Letting it propagate aborts a run; mapping it to FAIL books a correct int-returning kernel as a caught bug. |
-| Every `PropertyResult` carries exactly one of `case_id`/`group_id` | `HybridOracle` concatenates arms; the split point is not recoverable from a flat list. `_result` raises otherwise. |
+| Every `PropertyResult` carries exactly one of `case_id`/`group_id` **from an oracle** | `HybridOracle` concatenates arms; the split point is not recoverable from a flat list. `_result` raises otherwise. |
+| Every **persisted score row** carries `group_id`, always; `case_id` refines it | The case group is the unit at which arms are comparable — per-result rates differ 0.778 vs 0.222 for the same 14 detections. The driver (`_keyed_by_group`) stamps it; `ScoreTable` refuses a row without it. |
+| Both tables carry a `corpus_fingerprint`; pair them with `driver.read_run` | Case ids are a pure function of `(seed, index)`, so another run's `scores.parquet` joins perfectly and reports a rate about neither run. The fingerprint is a per-write uuid plus the case-id set, so a re-record gets a new identity. |
 | Bad **data** → `INCONCLUSIVE`; bad **call** → raise | The line is whether a re-run costs hardware time. Offline scoring can be re-run for free. |
 | `np.ascontiguousarray` is `ndmin=1` | It promotes 0-d to `(1,)` *before* safetensors sees it. safetensors round-trips `[]` faithfully — do not blame it. |
 | Kernel inputs are read-only during execution | `readonly_inputs` turns silent corruption into a loud `launch_error`. Verified against 20 legitimate kernels; none affected. |
@@ -101,15 +103,21 @@ spec compliance had already passed.
 
 ## Open obligations
 
-1. **No driver.** Nothing in `src/` composes generate → execute → persist → score. It is
-   assembled twice in test files and the two already differ.
-2. **Metrics are not computable from what is recorded.** The execution table has no
-   kernel-identity column, and `PropertyResult` has no persistence path. Both are cheap now and
-   expensive after the first paid hardware run.
-3. **The declarative arm, hybrid arm, and contract loader have no acceptance criteria.** The
-   nine existing criteria cover infrastructure only.
-4. `contract.py` is imported only by its tests — the spec-as-oracle path is not yet exercised by
-   production code.
+Obligations 1, 2 and 4 were discharged by phase 1.5 (`props/driver.py`, the kernel-identity
+and score tables, and the contract-built declarative arm). What remains:
+
+1. **The declarative arm, hybrid arm, and contract loader have no acceptance criteria.** The
+   existing criteria cover infrastructure only.
+2. **`elapsed_s` is recorded but not yet fair.** It is order-biased — the arm that runs second
+   inherits warm caches — and a single run's value must not be quoted as a cost-per-bug
+   denominator. The metrics phase needs repeated timing with randomized arm order.
+3. **Partial abstention is undetectable.** The driver refuses an arm that is INCONCLUSIVE on
+   *every* group, but an arm that abstains on some cannot be told from one that honestly could
+   not judge them — abstention is a legitimate answer, so only the degenerate case is decidable.
+4. `HybridOracle` is not wired into `run_task`, which drives one task with two arms by design.
+   Adding it means deciding how its deliberately conditional reference coverage interacts with
+   the driver's whole-table coverage check.
 5. Degenerate ladder shapes `(1,1)` and `(17,1)` make softmax identically 1.0, so ~22% of groups
    score any kernel clean. It deflates both arms equally, so arm-vs-arm stays unbiased, but the
-   absolute detection rate is understated by that constant and the paper must say so.
+   absolute detection rate is understated by that constant and the paper must say so. Measured
+   end to end through the driver: 7/9 = 0.778 for both arms against `unnormalized_softmax`.
