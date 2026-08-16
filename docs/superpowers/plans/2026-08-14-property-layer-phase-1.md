@@ -53,7 +53,7 @@ failure *is* the red state.
 - Create: `tests/spec/test_0004_property_layer.py`
 - Modify: `specs/README.md` (feature index table)
 
-- [ ] **Step 1: Write the spec**
+- [x] **Step 1: Write the spec**
 
 Create `specs/features/0004-property-oracle-layer/spec.md`:
 
@@ -93,7 +93,7 @@ a numerical tolerance.
 See [acceptance.yaml](./acceptance.yaml).
 ```
 
-- [ ] **Step 2: Write the acceptance criteria**
+- [x] **Step 2: Write the acceptance criteria**
 
 Create `specs/features/0004-property-oracle-layer/acceptance.yaml`:
 
@@ -146,7 +146,7 @@ criteria:
       test: tests/integration/test_record_replay.py::test_both_arms_see_byte_identical_inputs
 ```
 
-- [ ] **Step 3: Write the spec test**
+- [x] **Step 3: Write the spec test**
 
 Create `tests/spec/test_0004_property_layer.py`:
 
@@ -233,7 +233,7 @@ def test_0004_every_criterion_is_collectable(repo_root: Path):
     )
 ```
 
-- [ ] **Step 4: Register the feature**
+- [x] **Step 4: Register the feature**
 
 In `specs/README.md`, add a row to the feature index table beneath the 0002 row:
 
@@ -241,13 +241,13 @@ In `specs/README.md`, add a row to the feature index table beneath the 0002 row:
 | [0004](./features/0004-property-oracle-layer/spec.md) | Property/oracle layer (phase 1) | in progress |
 ```
 
-- [ ] **Step 5: Run the spec test to verify it fails (red)**
+- [x] **Step 5: Run the spec test to verify it fails (red)**
 
 Run: `pytest tests/spec/test_0004_property_layer.py -v`
 Expected: `test_0004_acceptance_file_is_wellformed` PASSES; the other two FAIL, because none of
 the referenced test files exist yet. This red state is the point of the task.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add specs/features/0004-property-oracle-layer tests/spec/test_0004_property_layer.py specs/README.md
@@ -263,7 +263,7 @@ scripts/git_commit_clean.sh -m "spec: add feature 0004 property/oracle layer acc
 - Create: `tests/unit/props/__init__.py`
 - Modify: `pyproject.toml:11-15`
 
-- [ ] **Step 1: Add dependencies**
+- [x] **Step 1: Add dependencies**
 
 In `pyproject.toml`, replace the `dependencies` list with:
 
@@ -277,7 +277,7 @@ dependencies = [
 ]
 ```
 
-- [ ] **Step 2: Create the package**
+- [x] **Step 2: Create the package**
 
 Create `src/autokernel_pbt/props/__init__.py`:
 
@@ -290,12 +290,12 @@ Create an empty `tests/unit/props/__init__.py`:
 ```python
 ```
 
-- [ ] **Step 3: Verify install**
+- [x] **Step 3: Verify install**
 
 Run: `pip install -e ".[dev]" && python -c "import autokernel_pbt.props, safetensors, pyarrow; print('ok')"`
 Expected: `ok`
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add pyproject.toml src/autokernel_pbt/props/__init__.py tests/unit/props/__init__.py
@@ -313,7 +313,7 @@ through a dict so a recorded run can be regenerated months later.
 - Create: `src/autokernel_pbt/props/domain.py`
 - Test: `tests/unit/props/test_domain.py`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/unit/props/test_domain.py`:
 
@@ -349,12 +349,12 @@ def test_domain_rejects_unknown_dtype():
         TensorSpec(name="x", dtype="bfloat16")
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `pytest tests/unit/props/test_domain.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'autokernel_pbt.props.domain'`
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Create `src/autokernel_pbt/props/domain.py`:
 
@@ -459,12 +459,12 @@ class InputDomain:
         )
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `pytest tests/unit/props/test_domain.py -v`
 Expected: PASS, 4 passed
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/autokernel_pbt/props/domain.py tests/unit/props/test_domain.py
@@ -482,7 +482,7 @@ holds a base case plus zero or more derived partners.
 - Create: `src/autokernel_pbt/props/case.py`
 - Test: `tests/unit/props/test_case.py`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/unit/props/test_case.py`:
 
@@ -541,12 +541,12 @@ def test_group_rejects_mismatched_group_id():
         CaseGroup(group_id="g0", cases=(_case("c0"), other))
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `pytest tests/unit/props/test_case.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'autokernel_pbt.props.case'`
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Create `src/autokernel_pbt/props/case.py`:
 
@@ -640,12 +640,12 @@ class CaseGroup:
         return next((c for c in self.cases if c.relation == relation), None)
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `pytest tests/unit/props/test_case.py -v`
 Expected: PASS, 5 passed
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/autokernel_pbt/props/case.py tests/unit/props/test_case.py
@@ -663,7 +663,7 @@ will consume it.
 - Create: `src/autokernel_pbt/props/relations.py`
 - Test: `tests/unit/props/test_relations.py`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/unit/props/test_relations.py`:
 
@@ -727,12 +727,12 @@ def test_relations_are_deterministic_for_a_seed():
     assert np.array_equal(a.tensors["x"], b.tensors["x"])
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `pytest tests/unit/props/test_relations.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'autokernel_pbt.props.relations'`
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Create `src/autokernel_pbt/props/relations.py`:
 
@@ -830,12 +830,12 @@ RELATIONS: dict[str, Callable[[], Relation]] = {
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `pytest tests/unit/props/test_relations.py -v`
 Expected: PASS, 6 passed
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/autokernel_pbt/props/relations.py tests/unit/props/test_relations.py
@@ -854,7 +854,7 @@ generation strategy.
 - Create: `src/autokernel_pbt/props/generator.py`
 - Test: `tests/unit/props/test_generator.py`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/unit/props/test_generator.py`:
 
@@ -908,12 +908,12 @@ def test_dtype_is_honoured():
     assert groups[0].base.tensors["x"].dtype == np.float32
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `pytest tests/unit/props/test_generator.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'autokernel_pbt.props.generator'`
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Create `src/autokernel_pbt/props/generator.py`:
 
@@ -991,12 +991,12 @@ class Generator:
         return groups
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `pytest tests/unit/props/test_generator.py -v`
 Expected: PASS, 6 passed
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/autokernel_pbt/props/generator.py tests/unit/props/test_generator.py
@@ -1018,7 +1018,7 @@ tier-2 properties cannot recover it offline.
 - Create: `src/autokernel_pbt/props/backends/numpy_backend.py`
 - Test: `tests/unit/props/test_numpy_backend.py`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/unit/props/test_numpy_backend.py`:
 
@@ -1075,12 +1075,12 @@ def test_perm_helper_tensor_is_not_passed_to_kernel():
     assert result.status == "ok"
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `pytest tests/unit/props/test_numpy_backend.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'autokernel_pbt.props.backends'`
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Create `src/autokernel_pbt/props/backends/__init__.py`:
 
@@ -1170,12 +1170,12 @@ class NumpyBackend:
         )
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `pytest tests/unit/props/test_numpy_backend.py -v`
 Expected: PASS, 5 passed
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/autokernel_pbt/props/backends tests/unit/props/test_numpy_backend.py
@@ -1194,7 +1194,7 @@ comparison is not fair.
 - Create: `src/autokernel_pbt/props/table.py`
 - Test: `tests/unit/props/test_table.py`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/unit/props/test_table.py`:
 
@@ -1269,12 +1269,12 @@ def test_read_on_missing_run_returns_empty(tmp_path):
     assert ExecutionTable(tmp_path / "nope").read() == []
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `pytest tests/unit/props/test_table.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'autokernel_pbt.props.table'`
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Create `src/autokernel_pbt/props/table.py`:
 
@@ -1377,12 +1377,12 @@ class ExecutionTable:
         return groups
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `pytest tests/unit/props/test_table.py -v`
 Expected: PASS, 5 passed
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/autokernel_pbt/props/table.py tests/unit/props/test_table.py
@@ -1400,7 +1400,7 @@ bug, or the false-positive metric becomes meaningless.
 - Create: `src/autokernel_pbt/props/verdict.py`
 - Test: `tests/unit/props/test_verdict.py`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/unit/props/test_verdict.py`:
 
@@ -1441,12 +1441,12 @@ def test_result_records_attribution_fields():
     assert result.tolerance_free is False
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `pytest tests/unit/props/test_verdict.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'autokernel_pbt.props.verdict'`
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Create `src/autokernel_pbt/props/verdict.py`:
 
@@ -1489,12 +1489,12 @@ def summarize(results: list[PropertyResult]) -> Verdict:
     return Verdict.PASS
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `pytest tests/unit/props/test_verdict.py -v`
 Expected: PASS, 5 passed
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/autokernel_pbt/props/verdict.py tests/unit/props/test_verdict.py
@@ -1512,7 +1512,7 @@ than a hand-picked `rtol` per dtype.
 - Create: `src/autokernel_pbt/props/tolerance.py`
 - Test: `tests/unit/props/test_tolerance.py`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/unit/props/test_tolerance.py`:
 
@@ -1567,12 +1567,12 @@ def test_machine_eps_matches_numpy():
     assert machine_eps(np.float32) == np.finfo(np.float32).eps
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `pytest tests/unit/props/test_tolerance.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'autokernel_pbt.props.tolerance'`
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 > **The shipped implementation diverges from the sketch below — read the file, not this.**
 > Three changes came out of review, all measured:
@@ -1648,12 +1648,12 @@ def within_threshold(ratio: float, thresh: float = DEFAULT_THRESH) -> bool:
     return bool(np.isfinite(ratio) and ratio < thresh)
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `pytest tests/unit/props/test_tolerance.py -v`
 Expected: PASS, 7 passed
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/autokernel_pbt/props/tolerance.py tests/unit/props/test_tolerance.py
@@ -1672,7 +1672,7 @@ result.
 - Create: `src/autokernel_pbt/props/properties.py`
 - Test: `tests/unit/props/test_properties.py`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/unit/props/test_properties.py`:
 
@@ -1766,12 +1766,12 @@ def test_shift_invariance_inconclusive_without_partner():
     assert ShiftInvariance().check_group([_row(X, _softmax(X))]).verdict is Verdict.INCONCLUSIVE
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `pytest tests/unit/props/test_properties.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'autokernel_pbt.props.properties'`
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Create `src/autokernel_pbt/props/properties.py`:
 
@@ -1928,12 +1928,12 @@ SOFTMAX_CASE_PROPERTIES: tuple[CaseProperty, ...] = (
 SOFTMAX_GROUP_PROPERTIES: tuple[GroupProperty, ...] = (ShiftInvariance(),)
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `pytest tests/unit/props/test_properties.py -v`
 Expected: PASS, 9 passed
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/autokernel_pbt/props/properties.py tests/unit/props/test_properties.py
@@ -1951,7 +1951,7 @@ boolean, because attribution is what makes the experiment analysable.
 - Create: `src/autokernel_pbt/props/oracle.py`
 - Test: `tests/unit/props/test_oracle.py`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/unit/props/test_oracle.py`:
 
@@ -2062,12 +2062,12 @@ def test_hybrid_short_circuits_when_declarative_fails():
     assert "matches_reference" not in names
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `pytest tests/unit/props/test_oracle.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'autokernel_pbt.props.oracle'`
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Create `src/autokernel_pbt/props/oracle.py`:
 
@@ -2189,12 +2189,12 @@ class HybridOracle(_OracleBase):
         return results + self.reference.evaluate(rows)
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `pytest tests/unit/props/test_oracle.py -v`
 Expected: PASS, 9 passed
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/autokernel_pbt/props/oracle.py tests/unit/props/test_oracle.py
@@ -2212,7 +2212,7 @@ and an assertion that both arms saw **byte-identical inputs**. That assertion is
 - Create: `src/autokernel_pbt/props/tasks.py`
 - Create: `tests/integration/test_record_replay.py`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/integration/test_record_replay.py`:
 
@@ -2292,12 +2292,12 @@ def test_replay_needs_no_re_execution(tmp_path):
         assert late_oracle.summary(late_oracle.evaluate(rows)) is Verdict.PASS
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `pytest tests/integration/test_record_replay.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'autokernel_pbt.props.tasks'`
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Create `src/autokernel_pbt/props/tasks.py`:
 
@@ -2359,17 +2359,17 @@ SOFTMAX = Task(
 TASKS = {RELU.task_id: RELU, SOFTMAX.task_id: SOFTMAX}
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `pytest tests/integration/test_record_replay.py -v`
 Expected: PASS, 4 passed
 
-- [ ] **Step 5: Run the whole suite**
+- [x] **Step 5: Run the whole suite**
 
 Run: `pytest -m "not gpu" -q`
 Expected: PASS, all tests green
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/autokernel_pbt/props/tasks.py tests/integration/test_record_replay.py
@@ -2392,7 +2392,7 @@ which is exactly what the authoring-cost metric will later measure.
 - Create: `src/autokernel_pbt/props/contract.py`
 - Test: `tests/unit/props/test_contract.py`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/unit/props/test_contract.py`:
 
@@ -2442,12 +2442,12 @@ def test_every_criterion_carries_a_description(repo_root):
     assert all(c.description for c in contract.criteria)
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `pytest tests/unit/props/test_contract.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'autokernel_pbt.props.contract'`
 
-- [ ] **Step 3: Add the property registry**
+- [x] **Step 3: Add the property registry**
 
 Append to `src/autokernel_pbt/props/properties.py`:
 
@@ -2465,7 +2465,7 @@ GROUP_PROPERTY_REGISTRY: dict[str, type] = {
 }
 ```
 
-- [ ] **Step 4: Write the contract loader**
+- [x] **Step 4: Write the contract loader**
 
 Create `src/autokernel_pbt/props/contract.py`:
 
@@ -2541,7 +2541,7 @@ def oracle_from_contract(contract: Contract) -> DeclarativeOracle:
     return DeclarativeOracle(tuple(case_props), tuple(group_props))
 ```
 
-- [ ] **Step 5: Write the kernel contracts**
+- [x] **Step 5: Write the kernel contracts**
 
 Create `kernels/tasks/softmax/acceptance.yaml`:
 
@@ -2589,22 +2589,22 @@ criteria:
       property: outputs_are_finite
 ```
 
-- [ ] **Step 6: Run test to verify it passes**
+- [x] **Step 6: Run test to verify it passes**
 
 Run: `pytest tests/unit/props/test_contract.py -v`
 Expected: PASS, 5 passed
 
-- [ ] **Step 7: Verify the feature 0004 spec tests are now green**
+- [x] **Step 7: Verify the feature 0004 spec tests are now green**
 
 Run: `pytest tests/spec/test_0004_property_layer.py -v`
 Expected: PASS, 3 passed — every acceptance criterion now resolves to a collectable test.
 
-- [ ] **Step 8: Run the whole suite**
+- [x] **Step 8: Run the whole suite**
 
 Run: `pytest -m "not gpu" -q`
 Expected: PASS, all tests green
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add kernels/tasks src/autokernel_pbt/props/contract.py src/autokernel_pbt/props/properties.py tests/unit/props/test_contract.py
@@ -2615,13 +2615,13 @@ scripts/git_commit_clean.sh -m "feat: build declarative oracles from kernel acce
 
 ## Definition of Done
 
-- [ ] Feature 0004 spec tests pass — every acceptance criterion resolves to a collectable test
-- [ ] A kernel's declarative oracle is constructed from its `acceptance.yaml`, not hand-assembled
-- [ ] `pytest -m "not gpu"` passes with no failures
-- [ ] `ruff check src tests` passes
-- [ ] A recorded run can be replayed through two oracle arms with no backend involvement
-- [ ] Every property result carries `tier` and `tolerance_free` for later attribution analysis
-- [ ] `Verdict.INCONCLUSIVE` is produced for failed executions, never silently treated as PASS
+- [x] Feature 0004 spec tests pass — every acceptance criterion resolves to a collectable test
+- [x] A kernel's declarative oracle is constructed from its `acceptance.yaml`, not hand-assembled
+- [x] `pytest -m "not gpu"` passes with no failures
+- [x] `ruff check src tests` passes
+- [x] A recorded run can be replayed through two oracle arms with no backend involvement
+- [x] Every property result carries `tier` and `tolerance_free` for later attribution analysis
+- [x] `Verdict.INCONCLUSIVE` is produced for failed executions, never silently treated as PASS
 
 ## Explicitly Out of Scope for Phase 1
 
