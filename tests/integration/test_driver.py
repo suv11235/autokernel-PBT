@@ -13,8 +13,10 @@ months later with no hardware:
   nothing else, with no oracle, no kernel and no generator in the loop;
 * the declarative arm's property set is read back *off disk* and compared against a
   contract file that was edited on the way in;
-* the join between the two files is attacked three ways, because ``scores.py``
-  documents that neither file carries a run identity and hands the verification here.
+* the join between the two files is attacked five ways — a mistyped case key, a
+  mistyped group key, an arm that covers only part of the table, an arm that
+  establishes nothing anywhere, and a scores file belonging to a different run —
+  because ``scores.py`` enumerates exactly those and hands the verification here.
 """
 
 from __future__ import annotations
@@ -26,11 +28,15 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 import yaml
 
+from autokernel_pbt.props.backends.numpy_backend import NumpyBackend
 from autokernel_pbt.props.contract import CONTRACT_FILENAME, KERNEL_TASKS_DIR
-from autokernel_pbt.props.driver import run_task
+from autokernel_pbt.props.driver import read_run, run_task
+from autokernel_pbt.props.generator import Generator
 from autokernel_pbt.props.oracle import REFERENCE_PROPERTY, DeclarativeOracle, ReferenceOracle
 from autokernel_pbt.props.properties import RowsSumToOne, ShiftInvariance
 from autokernel_pbt.props.scores import SCORES_FILE, ArmScores, ScoreTable
@@ -105,29 +111,25 @@ def drive(
     return run_dir
 
 
-def group_of_case(run_dir: Path) -> dict[str, str]:
-    """case_id -> group_id, read from the execution table alone."""
-    return {row.case.case_id: row.case.group_id for row in ExecutionTable(run_dir).read()}
-
-
 def group_verdicts(run_dir: Path, arm_name: str) -> dict[str, Verdict]:
     """One verdict per recorded group for one arm, from the two Parquet files only.
 
-    THE UNIT OF ANALYSIS IS THE GROUP, and this function is where that is enforced on
-    the reading side. The arms emit different numbers of results per group — the
-    reference arm one per case, the declarative arm one per case per case-property plus
-    one per group-property — so a rate computed per *result* is a weighted average whose
-    weights are a property of the arm, not of the kernel. Rolled up per group with
-    ``summarize`` (the same rule both arms use internally) the two are comparable.
-    ``run_task``'s docstring states the guarantee that makes this well defined: every
-    arm covers every recorded group.
+    THE UNIT OF ANALYSIS IS THE GROUP, and this is what reading at that unit costs now
+    that every score row carries ``group_id``: a ``setdefault`` and a ``summarize``, with
+    no case-to-group join and no knowledge of which module wrote the file. An earlier
+    version of this helper did the join by hand — the same indirection a real consumer
+    would have had to reinvent, and the divergence this task exists to end.
+
+    ``read_run`` rather than two bare reads: a rate is a statement about both files at
+    once, and pairing them is the only place a scores file from another run is visible.
     """
-    to_group = group_of_case(run_dir)
-    arms = {arm.arm: arm for arm in ScoreTable(run_dir).read()}
-    per_group: dict[str, list[PropertyResult]] = {gid: [] for gid in set(to_group.values())}
-    for result in arms[arm_name].results:
-        group_id = result.group_id or to_group[result.case_id]
-        per_group[group_id].append(result)
+    rows, arms = read_run(run_dir)
+    by_arm = {arm.arm: arm for arm in arms}
+    per_group: dict[str, list[PropertyResult]] = {
+        row.case.group_id: [] for row in rows
+    }
+    for result in by_arm[arm_name].results:
+        per_group[result.group_id].append(result)
     return {gid: summarize(results) for gid, results in per_group.items()}
 
 
@@ -184,9 +186,13 @@ def test_both_arms_score_the_same_recorded_corpus(
 
     for arm in arms:
         judged_cases = {r.case_id for r in arm.results if r.case_id}
-        judged_groups = {r.group_id for r in arm.results if r.group_id}
+        judged_groups = {r.group_id for r in arm.results}
         assert judged_cases <= recorded_cases, f"{arm.arm} judged a case that was never recorded"
         assert judged_groups <= recorded_groups, f"{arm.arm} judged a group that was never recorded"
+        # Every row carries the unit of analysis, so the rollup below needs no join.
+        assert all(r.group_id for r in arm.results), (
+            f"{arm.arm} persisted a verdict with no group_id; it cannot be rolled up"
+        )
         # The corpus is shared only if it is also *whole* for each arm.
         assert set(group_verdicts(run_dir, arm.arm)) == recorded_groups, (
             f"{arm.arm} left part of the recorded table unscored"
@@ -226,6 +232,11 @@ def test_the_kernel_is_executed_exactly_once_per_case(tmp_path: Path, repo_root:
 
     The negative claim needs a counter rather than an absence of evidence, so the kernel
     counts its own invocations and is compared against the number of persisted rows.
+
+    Equality against a row count is only sound because a double execution cannot inflate
+    both sides of it: ``ExecutionTable.write`` rejects duplicate ``case_id``s outright
+    (they would share a payload file), so re-running a case adds an invocation and no
+    row, and the equality breaks rather than tracking.
     """
     calls = {"n": 0}
 
@@ -350,6 +361,18 @@ def _ghost_group(results: list[PropertyResult]) -> list[PropertyResult]:
     raise AssertionError("no group-scoped result to retarget; the saboteur is inert")
 
 
+def _all_inconclusive(results: list[PropertyResult]) -> list[PropertyResult]:
+    """An arm that names every group and establishes nothing on any of them.
+
+    Every id is real and coverage is complete, so all three join checks pass. What it
+    reports is 0.0 detection and 0.0 false positives with full apparent confidence —
+    indistinguishable in the artifacts from an honest arm that caught nothing. This is
+    what a property set whose members all defer, or a reference that failed on every
+    row, actually looks like.
+    """
+    return [replace(result, verdict=Verdict.INCONCLUSIVE) for result in results]
+
+
 def _partial_coverage() -> Callable[[list[PropertyResult]], list[PropertyResult]]:
     """Score the first group and abstain on the rest: the third documented attack.
 
@@ -381,6 +404,10 @@ JOIN_SABOTEURS = {
     "scoring_covers_only_part_of_the_table": (
         _partial_coverage,
         r"scored only part of the recorded table",
+    ),
+    "the_arm_establishes_nothing_anywhere": (
+        lambda: _all_inconclusive,
+        r"summarizes to INCONCLUSIVE on every one of",
     ),
 }
 
@@ -422,15 +449,92 @@ def test_scores_that_do_not_join_the_recorded_rows_are_refused(
     assert ExecutionTable(run_dir).read(), "the refusal destroyed the recorded run"
 
 
+def test_scores_from_another_run_are_refused(tmp_path: Path, repo_root: Path):
+    """The attack ``JOIN_IS_VERIFIED`` names first and no key check can see.
+
+    Case ids are a pure function of ``(seed, index)``, so the *correct* kernel's scores
+    dropped onto the *broken* kernel's table join perfectly: every case id is recorded,
+    every group is covered, nothing is malformed. The pair simply describes two
+    different runs — and it reads as a detection rate of zero against a kernel the
+    execution table itself labels broken.
+
+    The damage is measured first, deliberately: the refusal is only worth having if the
+    thing it refuses would otherwise have produced a plausible wrong number.
+    """
+    broken = drive(
+        tmp_path / "broken", unnormalized_softmax, "unnormalized_softmax", True, repo_root
+    )
+    correct = drive(tmp_path / "correct", correct_softmax, "correct_softmax", False, repo_root)
+    assert fail_rate(broken, DeclarativeOracle.name) > 0.0
+
+    shutil.copy(correct / SCORES_FILE, broken / SCORES_FILE)
+
+    # What the swap would have reported, read the naive way: two separate reads, every
+    # key joining, and a rate of zero on a kernel recorded as broken.
+    rows = ExecutionTable(broken).read()
+    swapped = {arm.arm: arm for arm in ScoreTable(broken).read()}
+    assert all(row.kernel_is_broken is True for row in rows)
+    assert {r.case_id for r in swapped[DeclarativeOracle.name].results if r.case_id} <= {
+        row.case.case_id for row in rows
+    }
+    assert not any(
+        r.verdict is Verdict.FAIL for r in swapped[DeclarativeOracle.name].results
+    ), "the swapped scores were not clean, so this proves nothing"
+
+    with pytest.raises(ValueError, match="different runs"):
+        read_run(broken)
+
+
+def test_scores_that_carry_no_corpus_identity_are_refused(tmp_path: Path, repo_root: Path):
+    """"Cannot tell" must not read as "fine".
+
+    A scores file written by something other than the driver — or by a build predating
+    the column — pairs with any table at all. Blanking the stamp is how that looks from
+    the reader's side.
+    """
+    run_dir = drive(tmp_path / "run", correct_softmax, "correct_softmax", False, repo_root)
+    table = pq.read_table(run_dir / SCORES_FILE)
+    blanked = table.set_column(
+        table.schema.get_field_index("corpus_fingerprint"),
+        "corpus_fingerprint",
+        pa.array([""] * table.num_rows, type=pa.string()),
+    )
+    pq.write_table(blanked, run_dir / SCORES_FILE)
+
+    with pytest.raises(ValueError, match="cannot be paired"):
+        read_run(run_dir)
+
+
 def test_a_clean_run_is_not_refused(tmp_path: Path, repo_root: Path):
     """The join guards' negative control.
 
-    Three refusals that fired on everything would satisfy every test above while making
-    the driver useless. This asserts the honest run reaches the write.
+    Refusals that fired on everything would satisfy every test above while making the
+    driver useless. This asserts the honest run reaches the write and pairs on read.
     """
     run_dir = drive(tmp_path / "run", correct_softmax, "correct_softmax", False, repo_root)
     assert (run_dir / SCORES_FILE).exists()
-    assert ScoreTable(run_dir).read()
+    rows, arms = read_run(run_dir)
+    assert rows and arms
+    assert ExecutionTable(run_dir).corpus_fingerprint() == ScoreTable(run_dir).corpus_fingerprint()
+
+
+def test_a_run_with_no_scores_yet_pairs_without_complaint(tmp_path: Path, repo_root: Path):
+    """Recorded but not scored is a legitimate state, not a mismatch.
+
+    Recording is the expensive half and may finish long before any arm runs; a pairing
+    check that refused it would make the artifacts unreadable between the two steps.
+    """
+    run_dir = tmp_path / "run"
+    backend = NumpyBackend()
+    ExecutionTable(run_dir).write(
+        [
+            backend.run(correct_softmax, case)
+            for group in Generator(SOFTMAX.domain, SEED).generate(ALL_SHAPES)
+            for case in group.cases
+        ]
+    )
+    rows, arms = read_run(run_dir)
+    assert rows and arms == []
 
 
 # --------------------------------------------------------------------------- #

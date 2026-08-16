@@ -26,22 +26,25 @@ This sits beside `rows.parquet` in the same run directory on purpose: a score is
 only meaningful against the executions it judged, and `case_id`/`group_id` are
 the join keys back to that table.
 
-THE JOIN IS UNVERIFIED, AND NOT VERIFIABLE HERE. Neither file carries a run
-identity, so nothing in this module can tell that a `scores.parquet` belongs to
-the `rows.parquet` beside it. Every one of these reads clean and yields a
-plausible wrong number:
+THE JOIN IS CHECKABLE BUT NOT CHECKED HERE. Four ways two individually valid
+files assert a rate nobody computed:
 
-* a `scores.parquet` copied in from another run — every score orphans, and the
-  detection rate is 0/0 rather than an error;
+* a `scores.parquet` copied in from another run — and because case ids are a pure
+  function of `(seed, index)`, one from a *correct-kernel* run joins perfectly
+  onto a *broken-kernel* table and reports 0.0 detection;
 * a single mistyped `case_id` — the denominator quietly loses a row;
 * scores covering three of ten recorded cases — the denominator is three;
-* worst, the *normal re-record workflow*: rewriting the execution table after
-  scoring, flipping `kernel_is_broken`, leaves two individually valid files that
-  together assert a rate nobody computed.
+* the *normal re-record workflow*: rewriting the execution table after scoring,
+  flipping `kernel_is_broken`, leaves two files that no longer describe one run.
 
-Verifying the join — scored `case_id`s a subset of recorded ones, and coverage
-complete enough for the rate being claimed — is the driver's job, because only
-the driver sees both tables in one place. Criterion `JOIN_IS_VERIFIED` in
+`corpus_fingerprint` closes the first and the last: both tables carry the identity
+of the corpus they are about (`table.new_corpus_fingerprint`), so a mismatched
+pair is detectable rather than merely wrong. It cannot close the middle two —
+those are statements about *coverage*, which needs both tables in view at once.
+
+So verification remains the driver's job: `driver.read_run` pairs the two files
+and refuses a mismatch, and `driver._verify_join` checks key validity and coverage
+before the scores are ever written. Criterion `JOIN_IS_VERIFIED` in
 `specs/features/0005-measurable-runs/acceptance.yaml` assigns it; note that
 `DETECTION_IS_DERIVABLE` requires only that the number be *computable*, not that
 it be *correct*, so it does not cover this.
@@ -91,10 +94,15 @@ SCHEMA = pa.schema(
         ("tolerance_free", pa.bool_()),
         ("verdict", pa.string()),
         ("detail", pa.string()),
-        # Exactly one of these is set; the empty one is "" rather than null, so
-        # the join key is a plain string comparison on both sides.
+        # `group_id` is ALWAYS set; `case_id` is set only on a case-scoped verdict and
+        # is "" (never null) otherwise, so the join key is a plain string comparison on
+        # both sides. See `_record` for why the coarser key is the mandatory one.
         ("case_id", pa.string()),
         ("group_id", pa.string()),
+        # Which corpus these verdicts judged. Meaningless alone; the whole value is in
+        # comparing it against the `rows.parquet` a reader intends to join to. See
+        # `table.new_corpus_fingerprint`.
+        ("corpus_fingerprint", pa.string()),
     ]
 )
 
@@ -131,8 +139,14 @@ class ScoreTable:
     def scores_path(self) -> Path:
         return self.run_dir / SCORES_FILE
 
-    def write(self, arms: list[ArmScores]) -> None:
+    def write(self, arms: list[ArmScores], *, corpus_fingerprint: str) -> None:
         """Persist every arm's results, replacing any scores already in `run_dir`.
+
+        `corpus_fingerprint` is the identity of the execution table these verdicts
+        judged, taken from `ExecutionTable.corpus_fingerprint()`. Keyword-only with no
+        default on purpose: a default of `""` would mean every caller that forgot it
+        wrote a scores file that pairs with *any* table, which is the hole this column
+        exists to close.
 
         Every check runs, and every record is built, before the filesystem is
         touched: this module is offline scoring, so a rejected call costs a
@@ -169,7 +183,9 @@ class ScoreTable:
                     f"non-negative number of seconds to serve as a cost denominator"
                 )
                 raise ValueError(msg)
-            records.extend(self._record(arm, result) for result in arm.results)
+            records.extend(
+                self._record(arm, result, corpus_fingerprint) for result in arm.results
+            )
 
         table = pa.Table.from_pylist(records, schema=SCHEMA)
 
@@ -183,16 +199,41 @@ class ScoreTable:
         finally:
             staged.unlink(missing_ok=True)
 
-    def _record(self, arm: ArmScores, result: PropertyResult) -> dict[str, Any]:
-        if bool(result.case_id) == bool(result.group_id):
-            # Neither key: the verdict is orphaned and can never be rejoined to
-            # the execution that produced it, so it can never be attributed to a
-            # kernel. Both keys: it joins twice, counting one verdict against two
-            # different units of analysis.
+    def _record(
+        self, arm: ArmScores, result: PropertyResult, corpus_fingerprint: str
+    ) -> dict[str, Any]:
+        """One persisted row. `group_id` is mandatory; `case_id` refines it.
+
+        THE UNIT OF ANALYSIS IS THE CASE GROUP, and this is where that stops being a
+        docstring and becomes a key. The arms emit different numbers of results per
+        group — the reference arm one per case, the declarative arm one per case per
+        case-property plus one per group-property — so a rate computed per *result* is a
+        weighted average whose weights belong to the arm rather than to the kernel.
+        Measured on the ladder corpus against one broken kernel: 14 FAILs either way, but
+        14/63 = 0.222 for the declarative arm against 14/18 = 0.778 for the reference
+        arm, where the group rollup is 0.778 for both. The per-result number is not a
+        different view of the same thing, it is wrong — and it is plausible, which is
+        worse.
+
+        Carrying `group_id` on every row makes the correct rollup a `GROUP BY group_id`
+        needing no join to `rows.parquet` and no knowledge of which module wrote the
+        file. The alternative considered and rejected was a `unit` column naming the
+        intended aggregation: that is a producer instructing a reader, and it would still
+        require the reader to perform a case -> group join it has no key for.
+
+        `case_id` stays, as the finer key: it is what attributes a verdict to one
+        execution, and what a per-case analysis (or a per-row debug) needs. A
+        group-scoped verdict carries `""` for it rather than null, so both columns are
+        plain string comparisons.
+        """
+        if not result.group_id:
+            # Without a group id the verdict cannot be rolled up at the only unit at
+            # which arms are comparable — and if it has no case id either, it is orphaned
+            # outright and can never be attributed to a kernel at all.
             msg = (
-                f"arm {arm.arm!r} result {result.property_name!r} must carry exactly one of "
-                f"case_id/group_id, got case_id={result.case_id!r} "
-                f"group_id={result.group_id!r}"
+                f"arm {arm.arm!r} result {result.property_name!r} carries no group_id "
+                f"(case_id={result.case_id!r}); every score row must name the group it "
+                f"judged, because the case group is the unit at which arms are comparable"
             )
             raise ValueError(msg)
         record = {
@@ -212,6 +253,7 @@ class ScoreTable:
             "detail": result.detail,
             "case_id": result.case_id,
             "group_id": result.group_id,
+            "corpus_fingerprint": corpus_fingerprint,
         }
         # `pa.Table.from_pylist` presence-checks nothing: a missing key becomes a
         # fully-null column, an extra key is dropped, and only types raise. This
@@ -264,12 +306,22 @@ class ScoreTable:
     def _result(self, record: dict[str, Any]) -> PropertyResult:
         """Rebuild one `PropertyResult`, refusing a row that lost an invariant."""
         name = record["property_name"]
-        if bool(record["case_id"]) == bool(record["group_id"]):
+        if not record["group_id"]:
             msg = (
                 f"{self.scores_path} has a row for property {name!r} carrying "
-                f"case_id={record['case_id']!r} and group_id={record['group_id']!r}; "
-                f"exactly one of case_id/group_id must be set, or the row cannot be "
-                f"rejoined to the execution it judged"
+                f"group_id={record['group_id']!r}; every row must name the group it "
+                f"judged, or it cannot be rolled up at the unit where arms are comparable"
+            )
+            raise ValueError(msg)
+        if record["case_id"] is None:
+            # A null, specifically — "" is the legitimate value on a group-scoped
+            # verdict. Rebuilt as `PropertyResult(case_id=None)` it would put a None in
+            # a column declared `str`, where a downstream `.startswith` becomes an
+            # AttributeError, and it would sort apart from "".
+            msg = (
+                f"{self.scores_path} has a row for property {name!r} with a null case_id; "
+                f"a group-scoped verdict must carry '' rather than null, so both join "
+                f"keys stay plain string comparisons"
             )
             raise ValueError(msg)
         # Parquet hands back a bare `str` for the verdict. It compares equal to
@@ -292,6 +344,30 @@ class ScoreTable:
             # refusal on this read path names the file; this one must too.
             msg = f"{exc} (property {name!r} in {self.scores_path})"
             raise ValueError(msg) from exc
+
+    def corpus_fingerprint(self) -> str:
+        """The corpus these scores judged, or `""` if the run has no scores.
+
+        Mirrors `ExecutionTable.corpus_fingerprint`, including its refusal of a file
+        whose rows disagree: `write` broadcasts one value to the whole file, so two
+        distinct values mean scores from two runs concatenated, and picking one would
+        certify half a file.
+        """
+        if not self.scores_path.exists():
+            return ""
+        table = pq.read_table(self.scores_path)
+        self._require_columns(table.schema.names)
+        distinct = sorted(set(table.column("corpus_fingerprint").to_pylist()))
+        if not distinct:
+            return ""
+        if len(distinct) > 1:
+            msg = (
+                f"{self.scores_path} carries {len(distinct)} different corpus "
+                f"fingerprints: {distinct}. A single write stamps one, so this file holds "
+                f"scores from more than one run and belongs to no single execution table"
+            )
+            raise ValueError(msg)
+        return distinct[0]
 
     def _require_columns(self, present: list[str]) -> None:
         """Reject a score file written by a build with a narrower schema.

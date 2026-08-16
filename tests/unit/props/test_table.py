@@ -636,3 +636,77 @@ def test_a_none_kernel_id_does_not_widen_the_string_column(tmp_path):
     result.kernel_id = None
     ExecutionTable(tmp_path / "run").write([result])
     assert ExecutionTable(tmp_path / "run").read()[0].kernel_id == ""
+
+
+# --- Corpus identity ----------------------------------------------------------
+
+
+def test_the_corpus_fingerprint_is_stamped_on_every_row(tmp_path):
+    """One identity per write, broadcast to the whole table.
+
+    Per-row rather than in a side table because Parquet dictionary-encodes a
+    single-valued string column to almost nothing, and a side table would cost a
+    join to save that nothing.
+    """
+    run = tmp_path / "run"
+    ExecutionTable(run).write([_result("c0"), _result("c1")])
+
+    stamped = pq.read_table(run / "rows.parquet").column("corpus_fingerprint").to_pylist()
+    assert len(set(stamped)) == 1
+    assert stamped[0] == ExecutionTable(run).corpus_fingerprint()
+    assert stamped[0], "an empty fingerprint would pair with anything"
+
+
+def test_re_recording_the_same_cases_mints_a_new_corpus_identity(tmp_path):
+    """The defence against the worst attack, and why this is not a pure hash.
+
+    Case ids are a pure function of `(seed, index)`, so a re-record — the normal
+    workflow after fixing a kernel — produces byte-for-byte the same id set while
+    recording entirely different executions. A content-derived fingerprint would be
+    identical across the two, and the *previous* run's scores would still appear to
+    belong to the new table. The per-write uuid is what separates them.
+    """
+    run = tmp_path / "run"
+    ExecutionTable(run).write([_result("c0")])
+    first = ExecutionTable(run).corpus_fingerprint()
+    ExecutionTable(run).write([_result("c0")])
+    second = ExecutionTable(run).corpus_fingerprint()
+
+    assert first and second
+    assert first != second, "a re-record kept the old corpus identity"
+
+
+def test_a_different_case_set_gets_a_different_fingerprint(tmp_path):
+    """The other half: the identity is also a statement about what is in the table."""
+    one = tmp_path / "one"
+    two = tmp_path / "two"
+    ExecutionTable(one).write([_result("c0")])
+    ExecutionTable(two).write([_result("c0"), _result("c1")])
+    assert ExecutionTable(one).corpus_fingerprint() != ExecutionTable(two).corpus_fingerprint()
+
+
+def test_a_table_carrying_two_corpus_fingerprints_is_refused(tmp_path):
+    """`write` broadcasts one value, so two means a file assembled from two runs.
+
+    Picking either would certify half a table as the whole of it.
+    """
+    run = tmp_path / "run"
+    ExecutionTable(run).write([_result("c0"), _result("c1")])
+    table = pq.read_table(run / "rows.parquet")
+    patched = table.set_column(
+        table.schema.get_field_index("corpus_fingerprint"),
+        "corpus_fingerprint",
+        pa.array(["aaa", "bbb"], type=pa.string()),
+    )
+    pq.write_table(patched, run / "rows.parquet")
+
+    with pytest.raises(ValueError, match="different corpus"):
+        ExecutionTable(run).corpus_fingerprint()
+
+
+def test_a_run_with_no_rows_has_no_corpus_fingerprint(tmp_path):
+    """`""` means "unstated"; every pairing check must refuse it rather than match it."""
+    assert ExecutionTable(tmp_path / "nope").corpus_fingerprint() == ""
+    empty = tmp_path / "empty"
+    ExecutionTable(empty).write([])
+    assert ExecutionTable(empty).corpus_fingerprint() == ""

@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -50,6 +51,7 @@ from autokernel_pbt.props.oracle import Oracle, ReferenceOracle
 from autokernel_pbt.props.scores import ArmScores, ScoreTable
 from autokernel_pbt.props.table import ExecutionTable
 from autokernel_pbt.props.tasks import Task
+from autokernel_pbt.props.verdict import PropertyResult, Verdict, summarize
 
 
 def contract_path(task: Task, repo_root: Path) -> Path:
@@ -65,6 +67,35 @@ def contract_path(task: Task, repo_root: Path) -> Path:
     root derived from ``__file__`` would be right under test and wrong in a wheel.
     """
     return repo_root / KERNEL_TASKS_DIR / task.task_id / CONTRACT_FILENAME
+
+
+def _keyed_by_group(
+    results: list[PropertyResult], group_of_case: dict[str, str]
+) -> list[PropertyResult]:
+    """Stamp each case-scoped verdict with the group its case belongs to.
+
+    The oracle layer's invariant is that a ``PropertyResult`` carries *exactly one* of
+    ``case_id``/``group_id``: ``HybridOracle`` concatenates two arms into one flat list
+    and the scope of a result is not otherwise recoverable from it. The *persisted*
+    invariant is different — every score row carries ``group_id``, and ``case_id``
+    refines it — because a reader of the artifacts has no way to perform the case-to-
+    group join otherwise, and the group is the unit at which arms are comparable.
+
+    The driver is the only layer that can bridge the two: it holds the recorded rows,
+    which are where the mapping lives. Doing it in the oracles instead would mean
+    changing the invariant that keeps the hybrid arm's split point recoverable, for the
+    benefit of a file the oracles never see.
+
+    A case id with no recorded row is left alone rather than raising here; that is
+    ``_verify_join``'s finding to report, and reporting it from two places would let one
+    guard's saboteur certify the other's.
+    """
+    return [
+        replace(result, group_id=group_of_case[result.case_id])
+        if result.case_id and not result.group_id and result.case_id in group_of_case
+        else result
+        for result in results
+    ]
 
 
 def _verify_join(recorded: list[ExecutionResult], scored: list[ArmScores]) -> None:
@@ -120,11 +151,10 @@ def _verify_join(recorded: list[ExecutionResult], scored: list[ArmScores]) -> No
             )
             raise ValueError(msg)
 
-        covered = {
-            result.group_id or group_of_case[result.case_id]
-            for result in arm.results
-            if result.case_id or result.group_id
-        }
+        # `.get` rather than `[]`: an unknown case id is the check above's finding, and
+        # a KeyError raised from here would report it in the wrong guard's name.
+        covered = {result.group_id or group_of_case.get(result.case_id, "") for result in arm.results}
+        covered.discard("")
         unscored = sorted(recorded_groups - covered)
         if unscored:
             msg = (
@@ -134,6 +164,86 @@ def _verify_join(recorded: list[ExecutionResult], scored: list[ArmScores]) -> No
                 f"with nothing in either file saying so"
             )
             raise ValueError(msg)
+
+        # Coverage is necessary and not sufficient: an arm can name every group and
+        # still have established nothing on any of them. Wholly-INCONCLUSIVE is what a
+        # misconfigured arm looks like — a property set whose members all defer, a
+        # reference that raised on every row — and it is indistinguishable in the
+        # artifacts from an honest arm that simply caught nothing, while reporting 0.0
+        # detection and 0.0 false positives with full confidence. Like `ScoreTable`'s
+        # "arm has no results", this is a wiring bug rather than data, so it raises.
+        #
+        # KNOWN LIMIT: an arm that abstains on *some* groups is not caught here, and
+        # cannot be — abstention is a legitimate, load-bearing answer (see
+        # `oracle.py`), so only the degenerate all-or-nothing case is decidable.
+        by_group: dict[str, list[PropertyResult]] = {}
+        for result in arm.results:
+            by_group.setdefault(result.group_id or group_of_case[result.case_id], []).append(
+                result
+            )
+        # `by_group` empty means the arm judged nothing at all, which the coverage check
+        # above already reported for any non-empty table; `all()` over nothing is True,
+        # so without this the empty-table case would be blamed on the wrong guard.
+        if by_group and all(
+            summarize(results) is Verdict.INCONCLUSIVE for results in by_group.values()
+        ):
+            msg = (
+                f"arm {arm.arm!r} summarizes to INCONCLUSIVE on every one of "
+                f"{len(by_group)} recorded group(s); it established nothing anywhere, "
+                f"which is a misconfigured arm rather than a result, and would be "
+                f"persisted as a detection rate of 0.0 with nothing saying so"
+            )
+            raise ValueError(msg)
+
+
+def read_run(run_dir: Path | str) -> tuple[list[ExecutionResult], list[ArmScores]]:
+    """Both of a run's tables, refusing a pair that is not about the same corpus.
+
+    THIS IS THE READ PATH FOR ANYONE COMPUTING A NUMBER. Reading the two tables
+    separately is always possible and is sometimes right — but a rate is a statement
+    about both at once, and the pairing is exactly what neither table can check alone.
+
+    Case ids are a pure function of ``(seed, index)``, so a ``scores.parquet`` from a
+    *correct-kernel* run dropped beside a *broken-kernel* ``rows.parquet`` joins on every
+    key and reports 0.0 detection against a kernel the table labels broken. Nothing about
+    that file is malformed; it is simply about a different run. The corpus fingerprint
+    (see ``table.new_corpus_fingerprint``) is what makes it detectable, and this is where
+    it is checked.
+
+    An unstamped file — ``""`` on either side — is refused rather than waved through:
+    it means a table written by a build that predates the column, or scores written by
+    something other than the driver, and in both cases "cannot tell" must not read as
+    "fine".
+
+    Returns ``(rows, arms)``. A run with a table but no scores yet is not an error and
+    returns ``(rows, [])``; a run with neither returns ``([], [])``.
+    """
+    table = ExecutionTable(run_dir)
+    scores = ScoreTable(run_dir)
+    rows = table.read()
+    arms = scores.read()
+    if not arms:
+        return rows, arms
+
+    recorded = table.corpus_fingerprint()
+    judged = scores.corpus_fingerprint()
+    if not recorded or not judged:
+        msg = (
+            f"run {Path(run_dir)} has scores that cannot be paired with its execution "
+            f"table: corpus fingerprint is {recorded!r} on the rows and {judged!r} on the "
+            f"scores. An unstamped file may belong to any run, so it is refused rather "
+            f"than assumed to belong to this one"
+        )
+        raise ValueError(msg)
+    if recorded != judged:
+        msg = (
+            f"run {Path(run_dir)} pairs scores for corpus {judged} with an execution "
+            f"table for corpus {recorded}; these are different runs. Case ids are a pure "
+            f"function of (seed, index), so the two join cleanly on every key and would "
+            f"report a rate about neither run"
+        )
+        raise ValueError(msg)
+    return rows, arms
 
 
 def run_task(
@@ -155,34 +265,62 @@ def run_task(
     verdicts, one row per ``PropertyResult``, with the arm that produced it and what that
     arm cost).
 
-    THE UNIT OF ANALYSIS IS THE CASE GROUP. This is a guarantee, not an observation, and
-    it is the one thing a reader of the artifacts must know that the schema does not say.
+    THE UNIT OF ANALYSIS IS THE CASE GROUP, and every score row is keyed by it — that
+    is the guarantee, expressed as a key rather than as a note a reader may never see.
 
     The arms emit different numbers of results per group: the reference arm one per
     recorded case, the declarative arm one per case per case-property plus one per
     group-property. A rate computed per *result* is therefore a weighted average whose
-    weights are a property of the arm rather than of the kernel — measured on this
-    corpus, the same declarative arm reports 0.778 rolled up per group and 0.519 per
-    result, and only the first of those is comparable against the reference arm. So:
+    weights belong to the arm rather than to the kernel. Measured on the ladder corpus
+    against ``unnormalized_softmax``, both arms find 14 FAILs, and:
 
-    * what the driver guarantees is that **every arm reaches a verdict on every recorded
-      group**, enforced by ``_verify_join`` before anything is written;
-    * a rate over these artifacts must be computed by joining each score to its group
-      (``group_id`` directly, or ``case_id`` through ``rows.parquet``), folding the
-      group's results with ``verdict.summarize``, and counting groups.
+    ======================  ==========  ===========  ==========
+    rollup                  reference   declarative  comparable
+    ======================  ==========  ===========  ==========
+    per group (9 groups)    0.778       0.778        yes
+    per case (18 cases)     0.778       0.778        yes, here
+    per result              0.778       0.222        no
+    ======================  ==========  ===========  ==========
 
-    Deliberately NOT recorded as a column. A ``unit`` column on ``scores.parquet`` would
-    be a field describing how a *reader* should aggregate, written by the producer, and
-    it would be the only such field in either schema — the rows are per-result and stay
-    per-result. Adding it belongs with the metric computation this feature explicitly
-    defers, where it can be introduced with a consumer that reads it; a column nothing
-    reads is a claim nothing checks.
+    Note what this corpus does *not* say: per-case is equally comparable on it, because
+    every arm here happens to judge every case. The group is nonetheless the unit the
+    driver guarantees, and the reason is structural rather than numerical — a contract
+    of only group properties emits no ``case_id`` at all, so a per-case guarantee would
+    reject a legitimate arm, while a group-scoped verdict always exists. So:
+
+    * ``_verify_join`` enforces that **every arm reaches a verdict on every recorded
+      group** before anything is written;
+    * ``_keyed_by_group`` stamps every case-scoped verdict with its group, so the correct
+      rollup is ``GROUP BY group_id`` over ``scores.parquet`` alone — no join back to
+      ``rows.parquet``, and no knowledge of this docstring.
+
+    What is deliberately NOT added is a ``unit`` column naming the intended aggregation:
+    that is a producer instructing a reader, and it would leave the reader without the
+    key needed to follow the instruction. Recording the key makes the instruction
+    unnecessary.
 
     ``kernel_id`` is keyword-only with no default so an unwired call is a ``TypeError``
     rather than a run whose rows silently carry ``""``. ``kernel_is_broken`` does default,
     to ``None`` — "not stated", which is distinct from ``False`` ("stated correct") and
     must stay so: collapsing them enlarges the correct-kernel denominator of the
     false-positive rate.
+
+    ``elapsed_s`` IS NOT YET A FAIR COST DENOMINATOR, and a single run's value must not
+    be quoted as one. It is well-defined — wall-clock seconds bracketing exactly
+    ``oracle.evaluate``, with the contract load, the table read, the group keying and the
+    join verification all outside it, symmetrically for both arms — but it is
+    *order-biased*: the arm that runs second benefits from everything the first arm
+    warmed. Measured over 40 paired trials on this corpus, the reference/declarative
+    median ratio is 0.73 with the reference arm first and 0.70 with it second; an
+    independent review measured 0.80 against 0.67 on other hardware. The direction is
+    stable, the magnitude is not, and at ~0.5 ms per arm the whole measurement sits near
+    the clock's noise floor.
+
+    A usable cost-per-bug figure therefore needs repeated timing with randomized arm
+    order and a reported spread, and that belongs to the metrics phase, which is where
+    the number would be consumed. What this feature guarantees is only that the seconds
+    are *recorded* — they are the one quantity in these artifacts that re-scoring cannot
+    recover, because a second measurement is a different machine-minute.
 
     Raises ``ValueError`` before writing any scores if the verdicts do not join the
     recorded rows; the execution table is left intact, because the executions are the
@@ -207,26 +345,43 @@ def run_task(
     # rows" is true by construction rather than by comparison — and so that in-memory
     # interference between arms stays *detectable* (a fresh read per arm would give each
     # arm its own throwaway copy to scribble on).
-    recorded = ExecutionTable(run_dir).read_groups()
+    table = ExecutionTable(run_dir)
+    recorded = table.read_groups()
+    rows = [row for group_rows in recorded.values() for row in group_rows]
+    group_of_case = {row.case.case_id: row.case.group_id for row in rows}
 
+    # Built before the clock starts, and outside every arm's measurement, so the
+    # contract load is not charged to the declarative arm's cost.
     declarative = oracle_from_contract(load_contract(contract_path(task, repo_root)))
     arms: list[Oracle] = [ReferenceOracle(reference_fn), declarative]
 
     scored: list[ArmScores] = []
     for oracle in arms:
         # perf_counter, not process_time: cost-per-bug is wall-clock, which is what a
-        # reader comparing an arm's cost against a hardware run's cost needs.
+        # reader comparing an arm's cost against a hardware run's cost needs. See the
+        # docstring for why a single run's value is not yet a fair denominator.
         start = time.perf_counter()
-        arm_results = [result for rows in recorded.values() for result in oracle.evaluate(rows)]
+        arm_results = [result for group_rows in recorded.values() for result in oracle.evaluate(group_rows)]
         elapsed = time.perf_counter() - start
+        # Keying happens after the clock stops: it is bookkeeping the driver does, not
+        # work the arm did, and charging it to the arm would bias the very comparison
+        # the timing exists to support.
         # `oracle.name`, not a literal: the arm name is the key every downstream
         # comparison groups by, and a literal here could disagree with the class that
         # produced the results.
-        scored.append(ArmScores(arm=oracle.name, elapsed_s=elapsed, results=arm_results))
+        scored.append(
+            ArmScores(
+                arm=oracle.name,
+                elapsed_s=elapsed,
+                results=_keyed_by_group(arm_results, group_of_case),
+            )
+        )
 
     # Verified against the very rows the arms were handed, not a fresh read of the
     # table. A second read would verify the join for a corpus that may differ from the
     # scored one — which is the "execution table rewritten after scoring" attack, run by
     # the driver against itself.
-    _verify_join([row for rows in recorded.values() for row in rows], scored)
-    ScoreTable(run_dir).write(scored)
+    _verify_join(rows, scored)
+    # The identity is read back off the table rather than minted here, so the scores can
+    # only ever claim the corpus that is actually on disk beside them.
+    ScoreTable(run_dir).write(scored, corpus_fingerprint=table.corpus_fingerprint())

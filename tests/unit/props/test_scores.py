@@ -4,7 +4,16 @@ The score table is the only path by which a verdict outlives the process that
 produced it. Every test here is about one of three things: that a result comes
 back as the *same* object it went in as (not a lookalike string), that it still
 says which arm produced it and what that arm cost, and that it still names the
-execution row it judged.
+execution row and the case *group* it judged.
+
+Two things every persisted row carries, and both are load-bearing:
+
+* ``group_id``, always — the case group is the unit at which arms are comparable
+  (see ``ScoreTable._record``), so recording it makes the correct rollup a
+  ``GROUP BY`` needing no join. ``case_id`` refines it and is ``""`` on a
+  group-scoped verdict.
+* ``corpus_fingerprint`` — which execution table these verdicts are about. It is
+  passed in rather than defaulted, so the tests here name one explicitly.
 """
 
 import numpy as np
@@ -23,16 +32,39 @@ from autokernel_pbt.props.scores import (
 from autokernel_pbt.props.table import ExecutionTable
 from autokernel_pbt.props.verdict import TIER_BACKEND, TIER_PORTABLE, PropertyResult, Verdict
 
+#: A stand-in corpus identity. Opaque by design: nothing here may depend on its
+#: shape, only on whether two files carry the same one.
+CORPUS = "corpus-fingerprint-0000"
+
+
+def _write(run, arms) -> None:
+    """Every write in this module goes through one place.
+
+    ``corpus_fingerprint`` is a required keyword on ``ScoreTable.write`` — a default
+    would let a caller that forgot it produce a scores file that pairs with any
+    execution table, which is the hole the column exists to close — and repeating it
+    at 36 call sites would say nothing 36 times.
+    """
+    ScoreTable(run).write(arms, corpus_fingerprint=CORPUS)
+
 
 def _case_result(
     case_id: str = "c0",
     *,
+    group_id: str = "g0",
     property_name: str = "finite_outputs",
     verdict: Verdict = Verdict.PASS,
     tier: int = TIER_PORTABLE,
     tolerance_free: bool = True,
     detail: str = "",
 ) -> PropertyResult:
+    """A case-scoped verdict, carrying *both* keys.
+
+    This is what the driver persists: the oracles emit exactly one of the two (the
+    hybrid arm's split point depends on it), and the driver stamps the group before
+    writing. ``group_id`` defaults here because a persisted row without one is
+    refused — the unit of analysis is not optional.
+    """
     return PropertyResult(
         property_name=property_name,
         tier=tier,
@@ -40,6 +72,7 @@ def _case_result(
         verdict=verdict,
         detail=detail,
         case_id=case_id,
+        group_id=group_id,
     )
 
 
@@ -120,7 +153,7 @@ def test_scores_round_trip_and_rejoin_their_rows(tmp_path):
             _group_result("g1", verdict=Verdict.PASS),
         ],
     )
-    ScoreTable(run).write([scored])
+    _write(run, [scored])
 
     rows = ExecutionTable(run).read()
     arms = ScoreTable(run).read()
@@ -158,7 +191,7 @@ def test_each_result_records_its_arm(tmp_path):
     with no arm is a number with no owner.
     """
     run = tmp_path / "run"
-    ScoreTable(run).write(
+    _write(run,
         [
             ArmScores(arm="reference", elapsed_s=1.0, results=[_case_result("c0")]),
             ArmScores(
@@ -185,7 +218,7 @@ def test_arm_elapsed_is_recorded(tmp_path):
     """Cost-per-bug is bugs-caught over seconds-spent; without the seconds it is not
     derivable from the artifacts at all."""
     run = tmp_path / "run"
-    ScoreTable(run).write(
+    _write(run,
         [ArmScores(arm="hybrid", elapsed_s=12.5, results=[_case_result("c0")])]
     )
 
@@ -209,7 +242,7 @@ def test_verdict_round_trips_as_the_enum_member(tmp_path):
         _case_result("c1", verdict=Verdict.FAIL),
         _case_result("c2", verdict=Verdict.INCONCLUSIVE),
     ]
-    ScoreTable(run).write([ArmScores(arm="reference", elapsed_s=0.5, results=results)])
+    _write(run, [ArmScores(arm="reference", elapsed_s=0.5, results=results)])
 
     read_back = ScoreTable(run).read()[0].results
     assert [r.verdict for r in read_back] == [
@@ -228,7 +261,7 @@ def test_unknown_verdict_names_the_score_file(tmp_path):
     """A table written by a build with a different verdict vocabulary must refuse to
     read, and must say which file is stale."""
     run = tmp_path / "run"
-    ScoreTable(run).write(
+    _write(run,
         [ArmScores(arm="reference", elapsed_s=0.5, results=[_case_result("c0")])]
     )
     _patch_column(run, "verdict", ["skipped"], pa.string())
@@ -241,7 +274,7 @@ def test_tier_and_tolerance_free_keep_their_types(tmp_path):
     """`tier` is an int and `tolerance_free` a bool; a tier that came back as a float
     or a flag that came back as a string would split the tolerance-free report."""
     run = tmp_path / "run"
-    ScoreTable(run).write(
+    _write(run,
         [
             ArmScores(
                 arm="reference",
@@ -276,7 +309,7 @@ def test_every_field_of_a_result_round_trips(tmp_path):
         ),
         _group_result("g0"),
     ]
-    ScoreTable(run).write([ArmScores(arm="declarative", elapsed_s=3.5, results=original)])
+    _write(run, [ArmScores(arm="declarative", elapsed_s=3.5, results=original)])
     assert ScoreTable(run).read()[0].results == original
 
 
@@ -285,7 +318,7 @@ def test_elapsed_s_survives_as_an_exact_float(tmp_path):
     every cost-per-bug figure derived from it."""
     run = tmp_path / "run"
     elapsed = 0.1 + 0.2  # 0.30000000000000004
-    ScoreTable(run).write(
+    _write(run,
         [ArmScores(arm="reference", elapsed_s=elapsed, results=[_case_result("c0")])]
     )
     assert ScoreTable(run).read()[0].elapsed_s == elapsed
@@ -294,7 +327,7 @@ def test_elapsed_s_survives_as_an_exact_float(tmp_path):
 def test_an_int_elapsed_reads_back_as_a_float(tmp_path):
     """A caller passing `elapsed_s=1` must not widen the declared float64 column."""
     run = tmp_path / "run"
-    ScoreTable(run).write(
+    _write(run,
         [ArmScores(arm="reference", elapsed_s=1, results=[_case_result("c0")])]
     )
     assert ScoreTable(run).read()[0].elapsed_s == 1.0
@@ -307,7 +340,7 @@ def test_an_int_elapsed_reads_back_as_a_float(tmp_path):
 def test_two_arms_keep_their_own_elapsed_and_results(tmp_path):
     """One file, two arms: the reassembly must not smear timings across arms."""
     run = tmp_path / "run"
-    ScoreTable(run).write(
+    _write(run,
         [
             ArmScores(
                 arm="reference",
@@ -333,7 +366,7 @@ def test_a_repeated_arm_name_is_rejected(tmp_path):
     computed against half the work that produced it."""
     run = tmp_path / "run"
     with pytest.raises(ValueError, match="duplicate arm names"):
-        ScoreTable(run).write(
+        _write(run,
             [
                 ArmScores(arm="reference", elapsed_s=1.0, results=[_case_result("c0")]),
                 ArmScores(arm="reference", elapsed_s=2.0, results=[_case_result("c1")]),
@@ -343,11 +376,11 @@ def test_a_repeated_arm_name_is_rejected(tmp_path):
 
 def test_a_repeated_arm_name_is_rejected_before_anything_is_written(tmp_path):
     run = tmp_path / "run"
-    ScoreTable(run).write(
+    _write(run,
         [ArmScores(arm="reference", elapsed_s=1.0, results=[_case_result("c0")])]
     )
     with pytest.raises(ValueError, match="duplicate arm names"):
-        ScoreTable(run).write(
+        _write(run,
             [
                 ArmScores(arm="declarative", elapsed_s=1.0, results=[_case_result("c0")]),
                 ArmScores(arm="declarative", elapsed_s=2.0, results=[_case_result("c1")]),
@@ -361,7 +394,7 @@ def test_a_foreign_file_with_conflicting_elapsed_for_one_arm_is_refused(tmp_path
     arm disagreeing about how long that arm took. Picking the first would invent a
     cost figure, so the read refuses."""
     run = tmp_path / "run"
-    ScoreTable(run).write(
+    _write(run,
         [
             ArmScores(
                 arm="reference",
@@ -387,7 +420,7 @@ def test_a_nan_elapsed_is_rejected(tmp_path):
     """
     run = tmp_path / "run"
     with pytest.raises(ValueError, match="finite, non-negative"):
-        ScoreTable(run).write(
+        _write(run,
             [
                 ArmScores(
                     arm="reference",
@@ -401,7 +434,7 @@ def test_a_nan_elapsed_is_rejected(tmp_path):
 def test_an_infinite_elapsed_is_rejected(tmp_path):
     run = tmp_path / "run"
     with pytest.raises(ValueError, match="finite, non-negative"):
-        ScoreTable(run).write(
+        _write(run,
             [ArmScores(arm="reference", elapsed_s=float("inf"), results=[_case_result("c0")])]
         )
 
@@ -410,7 +443,7 @@ def test_a_negative_elapsed_is_rejected(tmp_path):
     """A subtraction the wrong way round; it would poison cost-per-bug silently."""
     run = tmp_path / "run"
     with pytest.raises(ValueError, match="finite, non-negative"):
-        ScoreTable(run).write(
+        _write(run,
             [ArmScores(arm="reference", elapsed_s=-5.0, results=[_case_result("c0")])]
         )
 
@@ -419,7 +452,7 @@ def test_a_zero_elapsed_is_accepted(tmp_path):
     """Zero is a measurement, not a placeholder: a trivially fast arm on a coarse
     clock reports it honestly, and rejecting it would fail a legitimate run."""
     run = tmp_path / "run"
-    ScoreTable(run).write(
+    _write(run,
         [ArmScores(arm="reference", elapsed_s=0.0, results=[_case_result("c0")])]
     )
     assert ScoreTable(run).read()[0].elapsed_s == 0.0
@@ -433,13 +466,13 @@ def test_an_arm_with_no_results_is_rejected(tmp_path):
     computed per arm, and would still charge its `elapsed_s` against zero verdicts."""
     run = tmp_path / "run"
     with pytest.raises(ValueError, match="no results"):
-        ScoreTable(run).write([ArmScores(arm="reference", elapsed_s=1.0)])
+        _write(run, [ArmScores(arm="reference", elapsed_s=1.0)])
 
 
 def test_an_arm_with_no_results_is_rejected_by_name(tmp_path):
     run = tmp_path / "run"
     with pytest.raises(ValueError, match="'declarative'"):
-        ScoreTable(run).write(
+        _write(run,
             [
                 ArmScores(arm="reference", elapsed_s=1.0, results=[_case_result("c0")]),
                 ArmScores(arm="declarative", elapsed_s=1.0),
@@ -457,28 +490,57 @@ def test_a_result_with_neither_case_id_nor_group_id_is_rejected(tmp_path):
         tolerance_free=True,
         verdict=Verdict.PASS,
     )
-    with pytest.raises(ValueError, match="exactly one of case_id/group_id"):
-        ScoreTable(run).write(
+    with pytest.raises(ValueError, match="carries no group_id"):
+        _write(run,
             [ArmScores(arm="reference", elapsed_s=1.0, results=[orphan])]
         )
 
 
-def test_a_result_with_both_case_id_and_group_id_is_rejected(tmp_path):
-    """Both keys set is ambiguous: the row would join twice, double-counting one
-    verdict against two different units of analysis."""
+def test_a_case_scoped_result_without_its_group_is_rejected(tmp_path):
+    """A verdict that names a case but not its group cannot be rolled up.
+
+    It is not orphaned — it joins to one execution — but the case group is the unit
+    at which arms are comparable, and recovering the group would require the reader
+    to join back to `rows.parquet` with knowledge no column supplies. This is the
+    write the driver's ``_keyed_by_group`` exists to prevent.
+    """
     run = tmp_path / "run"
-    ambiguous = PropertyResult(
-        property_name="shift_invariance",
+    unkeyed = PropertyResult(
+        property_name="finite_outputs",
+        tier=TIER_PORTABLE,
+        tolerance_free=True,
+        verdict=Verdict.PASS,
+        case_id="c0",
+    )
+    with pytest.raises(ValueError, match="carries no group_id"):
+        _write(run,
+            [ArmScores(arm="reference", elapsed_s=1.0, results=[unkeyed])]
+        )
+
+
+def test_both_keys_together_are_the_normal_case_scoped_row(tmp_path):
+    """The counterpart of the two rejections above, and the reason they are narrow.
+
+    A row carrying both keys is not ambiguous, it is the *ordinary* one: `group_id`
+    is the unit of analysis and `case_id` refines it to the execution judged. If
+    this were rejected, no case-scoped verdict could ever be rolled up without a
+    join, which is the whole point of the column.
+    """
+    run = tmp_path / "run"
+    both = PropertyResult(
+        property_name="rows_sum_to_one",
         tier=TIER_PORTABLE,
         tolerance_free=True,
         verdict=Verdict.FAIL,
         case_id="c0",
         group_id="g0",
     )
-    with pytest.raises(ValueError, match="exactly one of case_id/group_id"):
-        ScoreTable(run).write(
-            [ArmScores(arm="reference", elapsed_s=1.0, results=[ambiguous])]
-        )
+    _write(run, [ArmScores(arm="declarative", elapsed_s=1.0, results=[both])])
+
+    (read_back,) = ScoreTable(run).read()[0].results
+    assert read_back == both
+    assert read_back.case_id == "c0"
+    assert read_back.group_id == "g0"
 
 
 def test_an_attribution_failure_names_the_arm_and_the_property(tmp_path):
@@ -490,7 +552,7 @@ def test_an_attribution_failure_names_the_arm_and_the_property(tmp_path):
         verdict=Verdict.PASS,
     )
     with pytest.raises(ValueError, match=r"'declarative'.*'finite_outputs'"):
-        ScoreTable(run).write(
+        _write(run,
             [ArmScores(arm="declarative", elapsed_s=1.0, results=[orphan])]
         )
 
@@ -499,11 +561,11 @@ def test_a_rejected_write_leaves_the_previous_table_intact(tmp_path):
     """Every write-side guard fires before the file is touched, so a bad call costs
     nothing already recorded."""
     run = tmp_path / "run"
-    ScoreTable(run).write(
+    _write(run,
         [ArmScores(arm="reference", elapsed_s=1.0, results=[_case_result("c0")])]
     )
     with pytest.raises(ValueError, match="no results"):
-        ScoreTable(run).write([ArmScores(arm="declarative", elapsed_s=2.0)])
+        _write(run, [ArmScores(arm="declarative", elapsed_s=2.0)])
 
     arms = ScoreTable(run).read()
     assert [(arm.arm, arm.elapsed_s) for arm in arms] == [("reference", 1.0)]
@@ -518,17 +580,17 @@ def test_read_on_missing_run_returns_empty(tmp_path):
 
 def test_write_of_no_arms_produces_a_readable_empty_table(tmp_path):
     run = tmp_path / "run"
-    ScoreTable(run).write([])
+    _write(run, [])
     assert (run / SCORES_FILE).exists()
     assert ScoreTable(run).read() == []
 
 
 def test_rewrite_replaces_the_previous_scores(tmp_path):
     run = tmp_path / "run"
-    ScoreTable(run).write(
+    _write(run,
         [ArmScores(arm="reference", elapsed_s=1.0, results=[_case_result("c0")])]
     )
-    ScoreTable(run).write(
+    _write(run,
         [ArmScores(arm="declarative", elapsed_s=2.0, results=[_case_result("c1")])]
     )
     assert [arm.arm for arm in ScoreTable(run).read()] == ["declarative"]
@@ -536,7 +598,7 @@ def test_rewrite_replaces_the_previous_scores(tmp_path):
 
 def test_write_leaves_no_temporary_file_behind(tmp_path):
     run = tmp_path / "run"
-    ScoreTable(run).write(
+    _write(run,
         [ArmScores(arm="reference", elapsed_s=1.0, results=[_case_result("c0")])]
     )
     assert {p.name for p in run.iterdir()} == {SCORES_FILE}
@@ -546,7 +608,7 @@ def test_scores_live_beside_the_execution_table_in_one_run_dir(tmp_path):
     """The two tables share a run directory; neither write may disturb the other."""
     run = tmp_path / "run"
     ExecutionTable(run).write([_execution("c0")])
-    ScoreTable(run).write(
+    _write(run,
         [ArmScores(arm="reference", elapsed_s=1.0, results=[_case_result("c0")])]
     )
     assert [r.case.case_id for r in ExecutionTable(run).read()] == ["c0"]
@@ -560,7 +622,7 @@ def test_read_rejects_a_table_written_by_a_narrower_build(tmp_path):
     """A missing column must be refused by name, not surface as a bare KeyError from
     inside the row loop, which names neither the run nor the cause."""
     run = tmp_path / "run"
-    ScoreTable(run).write(
+    _write(run,
         [ArmScores(arm="reference", elapsed_s=1.0, results=[_case_result("c0")])]
     )
     narrowed = pq.read_table(run / SCORES_FILE).drop_columns(["arm", "elapsed_s"])
@@ -570,37 +632,44 @@ def test_read_rejects_a_table_written_by_a_narrower_build(tmp_path):
         ScoreTable(run).read()
 
 
-def test_read_rejects_a_row_with_neither_join_key(tmp_path):
-    """A null `case_id` would rebuild as `PropertyResult(case_id=None)`: an orphan
-    that joins to nothing, carrying a None in a column declared `str`, where a
-    downstream `.startswith` becomes an AttributeError. `read` already re-checks
-    the verdict vocabulary and the column set; this invariant is equally visible.
+def test_read_rejects_a_row_that_lost_its_group(tmp_path):
+    """A row with no `group_id` cannot be rolled up at the unit arms are compared at.
+
+    `write` cannot emit this; a foreign, hand-edited or older-build file can, and it
+    would silently drop a group from a rate rather than raise. `read` already
+    re-checks the verdict vocabulary and the column set; this invariant is equally
+    visible in the values.
     """
     run = tmp_path / "run"
-    ScoreTable(run).write(
+    _write(run,
+        [ArmScores(arm="reference", elapsed_s=1.0, results=[_case_result("c0")])]
+    )
+    _patch_column(run, "group_id", [None], pa.string())
+
+    with pytest.raises(ValueError, match="must name the group it judged"):
+        ScoreTable(run).read()
+
+
+def test_read_rejects_a_row_with_a_null_case_id(tmp_path):
+    """A null `case_id` rebuilds as `PropertyResult(case_id=None)`.
+
+    `""` is the legitimate value on a group-scoped verdict, so the check is against
+    null specifically: a None in a column declared `str` makes a downstream
+    `.startswith` an AttributeError and sorts apart from `""`.
+    """
+    run = tmp_path / "run"
+    _write(run,
         [ArmScores(arm="reference", elapsed_s=1.0, results=[_case_result("c0")])]
     )
     _patch_column(run, "case_id", [None], pa.string())
 
-    with pytest.raises(ValueError, match="exactly one of case_id/group_id"):
-        ScoreTable(run).read()
-
-
-def test_read_rejects_a_row_with_both_join_keys(tmp_path):
-    """Both keys set joins twice, counting one verdict against two units of analysis."""
-    run = tmp_path / "run"
-    ScoreTable(run).write(
-        [ArmScores(arm="reference", elapsed_s=1.0, results=[_case_result("c0")])]
-    )
-    _patch_column(run, "group_id", ["g0"], pa.string())
-
-    with pytest.raises(ValueError, match="exactly one of case_id/group_id"):
+    with pytest.raises(ValueError, match="null case_id"):
         ScoreTable(run).read()
 
 
 def test_a_join_key_failure_on_read_names_the_score_file(tmp_path):
     run = tmp_path / "run"
-    ScoreTable(run).write(
+    _write(run,
         [ArmScores(arm="reference", elapsed_s=1.0, results=[_case_result("c0")])]
     )
     _patch_column(run, "case_id", [None], pa.string())
@@ -613,7 +682,7 @@ def test_an_unknown_tier_names_the_score_file(tmp_path):
     """`PropertyResult.__post_init__` rejects the tier but names no file, which is
     inconsistent with every other refusal on this read path."""
     run = tmp_path / "run"
-    ScoreTable(run).write(
+    _write(run,
         [ArmScores(arm="reference", elapsed_s=1.0, results=[_case_result("c0")])]
     )
     _patch_column(run, "tier", [7], pa.int64())
@@ -634,9 +703,54 @@ def test_the_builder_actually_applies_the_schema_check(tmp_path, monkeypatch):
     monkeypatch.setattr("autokernel_pbt.props.scores.SCHEMA", widened)
 
     with pytest.raises(ValueError, match=r"missing: \['run_id'\]"):
-        ScoreTable(tmp_path / "run").write(
+        _write(tmp_path / "run",
             [ArmScores(arm="reference", elapsed_s=1.0, results=[_case_result("c0")])]
         )
+
+
+def test_the_corpus_fingerprint_is_stamped_on_every_row(tmp_path):
+    """Which execution table these verdicts are about, on every row.
+
+    Alone it says nothing; paired with `rows.parquet` it is the only thing that can
+    tell a scores file about *this* run from an identically-shaped one about another.
+    """
+    run = tmp_path / "run"
+    _write(run, [ArmScores(arm="reference", elapsed_s=1.0, results=[_case_result("c0")])])
+
+    stamped = pq.read_table(run / SCORES_FILE).column("corpus_fingerprint").to_pylist()
+    assert stamped == [CORPUS]
+    assert ScoreTable(run).corpus_fingerprint() == CORPUS
+
+
+def test_a_scores_file_holding_two_corpora_is_refused(tmp_path):
+    """Two fingerprints in one file means scores from two runs concatenated.
+
+    `write` broadcasts one value, so this is unreachable from here — but a file
+    assembled by hand, or by a future multi-run tool, would otherwise pair happily
+    with whichever table it was asked about.
+    """
+    run = tmp_path / "run"
+    _write(
+        run,
+        [
+            ArmScores(
+                arm="reference",
+                elapsed_s=1.0,
+                results=[_case_result("c0"), _case_result("c1")],
+            )
+        ],
+    )
+    _patch_column(run, "corpus_fingerprint", ["aaa", "bbb"], pa.string())
+
+    with pytest.raises(ValueError, match="different corpus"):
+        ScoreTable(run).corpus_fingerprint()
+
+
+def test_a_run_with_no_scores_has_no_corpus_fingerprint(tmp_path):
+    assert ScoreTable(tmp_path / "nope").corpus_fingerprint() == ""
+    empty = tmp_path / "empty"
+    _write(empty, [])
+    assert ScoreTable(empty).corpus_fingerprint() == ""
 
 
 def test_the_schema_check_is_the_shared_one_from_the_execution_table():

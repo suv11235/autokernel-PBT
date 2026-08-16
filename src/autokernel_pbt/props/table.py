@@ -38,10 +38,13 @@ codebase depends on the filename being the raw id.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
+import uuid
 from collections import Counter
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -87,8 +90,42 @@ SCHEMA = pa.schema(
         # `ExecutionResult` for why the two must not collapse.
         ("kernel_id", pa.string()),
         ("kernel_is_broken", pa.bool_()),
+        # Which corpus these rows are. See `new_corpus_fingerprint`; it is the only
+        # thing that lets a reader tell that a `scores.parquet` belongs to the
+        # `rows.parquet` beside it.
+        ("corpus_fingerprint", pa.string()),
     ]
 )
+
+
+def new_corpus_fingerprint(case_ids: Iterable[str]) -> str:
+    """Mint an identity for one recorded corpus. Not a pure function — see below.
+
+    Case ids are a pure function of ``(seed, index)``, so two runs of the same task at
+    the same seed produce *identical* ids while recording entirely different executions
+    — a different kernel, a different backend, a different day. That is precisely the
+    attack `scores.py` calls the worst of the four: a `scores.parquet` from a
+    correct-kernel run, dropped beside a broken-kernel `rows.parquet`, joins perfectly
+    on every key and reports a detection rate of zero against a kernel labelled broken.
+
+    So the fingerprint mixes two things:
+
+    * a fresh uuid per write, which makes every recording distinct *as an event* — this
+      is what defends the copied-file and re-record cases, neither of which a
+      content-derived hash could see;
+    * the sorted case id set, so the identity is also a statement about what is in the
+      table, and a fingerprint carried onto a different set of rows is detectable.
+
+    Being non-deterministic is the point and not a defect: a re-record MUST get a new
+    identity, or the scores of the run it replaced would still appear to belong.
+    """
+    digest = hashlib.sha256()
+    digest.update(uuid.uuid4().hex.encode())
+    for case_id in sorted(case_ids):
+        # A separator, so {"ab", "c"} and {"a", "bc"} cannot hash alike.
+        digest.update(b"\x00")
+        digest.update(case_id.encode())
+    return digest.hexdigest()
 
 
 def _persistable(array: np.ndarray) -> np.ndarray:
@@ -202,7 +239,11 @@ class ExecutionTable:
             msg = f"duplicate case_ids in one write, which would share a payload: {duplicates}"
             raise ValueError(msg)
 
-        records = [self._record(result) for result in results]
+        # One identity per write, minted here rather than by the caller: the corpus is
+        # whatever this call is about to record, and a caller-supplied identity could
+        # name a different one.
+        fingerprint = new_corpus_fingerprint(counts)
+        records = [self._record(result, fingerprint) for result in results]
         table = pa.Table.from_pylist(records, schema=SCHEMA)
 
         self.run_dir.mkdir(parents=True, exist_ok=True)
@@ -231,7 +272,7 @@ class ExecutionTable:
         finally:
             staged.unlink(missing_ok=True)
 
-    def _record(self, result: ExecutionResult) -> dict[str, Any]:
+    def _record(self, result: ExecutionResult, fingerprint: str) -> dict[str, Any]:
         record = result.case.metadata()
         record["shape"] = json.dumps(record["shape"])
         record["telemetry"] = json.dumps(result.telemetry, default=_json_safe)
@@ -246,6 +287,10 @@ class ExecutionTable:
         # from "".
         record["kernel_id"] = result.kernel_id or ""
         record["kernel_is_broken"] = result.kernel_is_broken
+        # Denormalized onto every row, like `arm` in scores.py and for the same reason:
+        # Parquet dictionary-encodes a single-valued string column, so a one-row-per-run
+        # side table would cost a join to save nothing.
+        record["corpus_fingerprint"] = fingerprint
         return _conform(record, SCHEMA)
 
     def read(self) -> list[ExecutionResult]:
@@ -328,6 +373,34 @@ class ExecutionTable:
             # gives no clue which run directory is stale.
             msg = f"{exc} (case {case_id!r} in {self.metadata_path})"
             raise ValueError(msg) from exc
+
+    def corpus_fingerprint(self) -> str:
+        """This corpus's identity, or `""` if the run has no rows.
+
+        A property of the *table*, so it is read from the file rather than carried on
+        `ExecutionResult`: a row does not know which corpus it is part of, and putting
+        it on the row would invite a caller to set it.
+
+        Rows disagreeing about it is not something `write` can emit — one value is
+        broadcast to the whole table — so it means a file assembled from two runs, which
+        is exactly what the fingerprint exists to catch. It raises rather than picking
+        one, for the same reason `ScoreTable.read` refuses a disagreeing `elapsed_s`.
+        """
+        if not self.metadata_path.exists():
+            return ""
+        table = pq.read_table(self.metadata_path)
+        self._require_columns(table.schema.names)
+        distinct = sorted(set(table.column("corpus_fingerprint").to_pylist()))
+        if not distinct:
+            return ""
+        if len(distinct) > 1:
+            msg = (
+                f"{self.metadata_path} carries {len(distinct)} different corpus "
+                f"fingerprints: {distinct}. A single write stamps one, so this table was "
+                f"assembled from more than one run and joins to nothing coherently"
+            )
+            raise ValueError(msg)
+        return distinct[0]
 
     def read_groups(self) -> dict[str, list[ExecutionResult]]:
         """Rows reassembled into case groups, preserving write order."""

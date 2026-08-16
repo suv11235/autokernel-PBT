@@ -34,6 +34,8 @@ import pytest
 
 from autokernel_pbt.props.backends.base import OUTPUT_NAME, ExecutionResult, Status
 from autokernel_pbt.props.backends.numpy_backend import NumpyBackend
+from autokernel_pbt.props.contract import load_contract, oracle_from_contract
+from autokernel_pbt.props.driver import contract_path
 from autokernel_pbt.props.generator import Generator
 from autokernel_pbt.props.oracle import (
     REFERENCE_PROPERTY,
@@ -303,7 +305,41 @@ def reference_oracle() -> ReferenceOracle:
 
 
 def declarative_oracle() -> DeclarativeOracle:
+    """The declarative arm this module scores with, built from the property tuples.
+
+    Kept tuple-built rather than contract-built on purpose: this module is about the
+    *fairness* of replay, and reading a YAML file to obtain an arm would couple every
+    test here to a file none of them are about. What that costs is pinned one function
+    down — ``test_the_tuple_built_arm_matches_the_contract_the_driver_uses``.
+    """
     return DeclarativeOracle(SOFTMAX_CASE_PROPERTIES, SOFTMAX_GROUP_PROPERTIES)
+
+
+def test_the_tuple_built_arm_matches_the_contract_the_driver_uses(repo_root: Path):
+    """The two ways this repo builds the declarative arm must agree.
+
+    ``driver.run_task`` builds it from ``kernels/tasks/softmax/acceptance.yaml``; this
+    module builds it from ``SOFTMAX_CASE_PROPERTIES``/``SOFTMAX_GROUP_PROPERTIES``. Until
+    now nothing compared them — ``test_contract.py`` pins the YAML against class-name
+    literals, not against the tuples — so the whole REPLAY_FAIRNESS suite could have been
+    validating an arm production no longer uses, and a criterion added to or removed from
+    the contract would have drifted silently.
+
+    Names, not instances: the properties are stateless and compare by identity, and the
+    name is what the contract selects by and what the persisted scores record.
+    """
+    contract = load_contract(contract_path(TASKS["softmax"], repo_root))
+    from_contract = oracle_from_contract(contract)
+    from_tuples = declarative_oracle()
+
+    assert {p.name for p in from_tuples.case_properties} == {
+        p.name for p in from_contract.case_properties
+    }
+    assert {p.name for p in from_tuples.group_properties} == {
+        p.name for p in from_contract.group_properties
+    }
+    # Non-vacuous in both scopes: an empty set on either side would compare equal.
+    assert from_contract.case_properties and from_contract.group_properties
 
 
 def arm_verdicts(oracle: Any, table: ExecutionTable) -> dict[str, Verdict]:
