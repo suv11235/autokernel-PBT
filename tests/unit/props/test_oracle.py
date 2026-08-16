@@ -534,7 +534,7 @@ def test_the_accumulation_length_can_be_overridden_for_a_contraction():
     cols = 262144
     x = np.zeros((2, 4), dtype=np.float32)  # input says 4; the real contraction is huge
     got = np.array([np.float32(1.0) + 120 * EPS32], dtype=np.float32)
-    ref = lambda **kw: np.array([1.0], dtype=np.float32)  # noqa: E731
+    ref = lambda **kw: np.array([1.0], dtype=np.float32)
 
     assert ReferenceOracle(ref).evaluate([_row(x, got)])[0].verdict is Verdict.FAIL
     assert ReferenceOracle(ref, n=cols).evaluate([_row(x, got)])[0].verdict is Verdict.PASS

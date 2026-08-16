@@ -32,6 +32,8 @@ def test_0001_bench_cli_help(repo_root: Path):
         capture_output=True,
         text=True,
         cwd=repo_root,
+        # The exit code is the assertion below, not a precondition for it.
+        check=False,
     )
     assert proc.returncode == 0
     assert "--kernel" in proc.stdout
@@ -53,6 +55,8 @@ def test_0001_bench_cli_json(repo_root: Path):
         capture_output=True,
         text=True,
         cwd=repo_root,
+        # The exit code is the assertion below, not a precondition for it.
+        check=False,
     )
     assert proc.returncode == 0
     data = json.loads(proc.stdout)

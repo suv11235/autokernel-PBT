@@ -24,9 +24,10 @@ fairness is the whole recorded row, not the half of it named "input".
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import numpy as np
 import pytest

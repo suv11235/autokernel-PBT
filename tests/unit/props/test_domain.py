@@ -6,7 +6,6 @@ import pytest
 
 from autokernel_pbt.props.domain import InputDomain, TensorSpec
 
-
 try:
     import numpy as np
     HAS_NUMPY = True

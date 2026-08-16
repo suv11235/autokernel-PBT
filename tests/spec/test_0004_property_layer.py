@@ -74,6 +74,9 @@ def test_0004_every_criterion_is_collectable(repo_root: Path):
         text=True,
         cwd=repo_root,
         timeout=120,
+        # The non-zero exit *is* the signal under test; the assertion below reports it
+        # with pytest's own stdout, which check=True would discard into a traceback.
+        check=False,
     )
     assert proc.returncode == 0, (
         f"pytest could not collect all criteria:\n{proc.stdout}\n{proc.stderr}"

@@ -21,6 +21,7 @@ dependencies = [
 dev = [
   "pytest>=8.0",
   "pytest-cov>=4.1",
+  "ruff>=0.16",
 ]
 gpu = [
   "torch>=2.2",
@@ -49,3 +50,11 @@ markers = [
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+
+[tool.ruff.lint.per-file-ignores]
+# TRY004 wants TypeError when a malformed value is the wrong *type*. The contract
+# loader deliberately raises ValueError for every defect in an acceptance.yaml —
+# blank ids, missing keys, unknown check types, non-mappings alike — because from a
+# caller's view they are one concept: "this contract file is not usable". Splitting
+# the type-shaped subset out would make every caller catch two exceptions for it.
+"src/autokernel_pbt/props/contract.py" = ["TRY004"]

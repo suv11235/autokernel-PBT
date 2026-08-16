@@ -19,5 +19,10 @@ jobs:
       - name: Install
         run: pip install -e ".[dev]"
 
+      - name: Lint
+        run: ruff check src tests
+
       - name: Unit + spec tests
-        run: pytest -m "not gpu" --cov=autokernel_pbt --cov-report=term-missing
+        run: >-
+          pytest -m "not gpu" --cov=autokernel_pbt --cov-report=term-missing
+          --cov-fail-under=95

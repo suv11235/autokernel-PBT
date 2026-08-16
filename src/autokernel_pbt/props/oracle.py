@@ -40,8 +40,8 @@ alternatives are wrong.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
-from typing import Callable, Protocol, runtime_checkable
+from collections.abc import Callable, Iterable, Sequence
+from typing import Protocol, runtime_checkable
 
 import numpy as np
 
