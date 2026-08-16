@@ -55,6 +55,20 @@ def _group_result(group_id: str = "g0", **kwargs) -> PropertyResult:
     return PropertyResult(group_id=group_id, **fields)
 
 
+def _patch_column(run, column: str, values, type_) -> None:
+    """Rewrite one column of a written score file.
+
+    Every use of this forges a file `write` refuses to emit — that is the point:
+    the read-side guards exist for foreign, hand-edited, or older-build files,
+    which is the only way those shapes can reach a reader.
+    """
+    table = pq.read_table(run / SCORES_FILE)
+    patched = table.set_column(
+        table.schema.get_field_index(column), column, pa.array(values, type=type_)
+    )
+    pq.write_table(patched, run / SCORES_FILE)
+
+
 def _execution(case_id: str, group_id: str = "g0", relation: str = "base") -> ExecutionResult:
     case = Case(
         case_id=case_id,
@@ -217,13 +231,7 @@ def test_unknown_verdict_names_the_score_file(tmp_path):
     ScoreTable(run).write(
         [ArmScores(arm="reference", elapsed_s=0.5, results=[_case_result("c0")])]
     )
-    table = pq.read_table(run / SCORES_FILE)
-    patched = table.set_column(
-        table.schema.get_field_index("verdict"),
-        "verdict",
-        pa.array(["skipped"], type=pa.string()),
-    )
-    pq.write_table(patched, run / SCORES_FILE)
+    _patch_column(run, "verdict", ["skipped"], pa.string())
 
     with pytest.raises(ValueError, match=SCORES_FILE):
         ScoreTable(run).read()
@@ -362,16 +370,59 @@ def test_a_foreign_file_with_conflicting_elapsed_for_one_arm_is_refused(tmp_path
             )
         ]
     )
-    table = pq.read_table(run / SCORES_FILE)
-    patched = table.set_column(
-        table.schema.get_field_index("elapsed_s"),
-        "elapsed_s",
-        pa.array([1.0, 2.0], type=pa.float64()),
-    )
-    pq.write_table(patched, run / SCORES_FILE)
+    _patch_column(run, "elapsed_s", [1.0, 2.0], pa.float64())
 
     with pytest.raises(ValueError, match="disagreeing elapsed_s"):
         ScoreTable(run).read()
+
+
+# --- elapsed_s must be usable as a denominator --------------------------------
+
+
+def test_a_nan_elapsed_is_rejected(tmp_path):
+    """A nan writes cleanly and then makes the file permanently unreadable.
+
+    `nan != nan`, so the read-side agreement check trips on the arm's *second*
+    row and blames a hand-edit that never happened. It is also not a cost figure.
+    """
+    run = tmp_path / "run"
+    with pytest.raises(ValueError, match="finite, non-negative"):
+        ScoreTable(run).write(
+            [
+                ArmScores(
+                    arm="reference",
+                    elapsed_s=float("nan"),
+                    results=[_case_result("c0"), _case_result("c1")],
+                )
+            ]
+        )
+
+
+def test_an_infinite_elapsed_is_rejected(tmp_path):
+    run = tmp_path / "run"
+    with pytest.raises(ValueError, match="finite, non-negative"):
+        ScoreTable(run).write(
+            [ArmScores(arm="reference", elapsed_s=float("inf"), results=[_case_result("c0")])]
+        )
+
+
+def test_a_negative_elapsed_is_rejected(tmp_path):
+    """A subtraction the wrong way round; it would poison cost-per-bug silently."""
+    run = tmp_path / "run"
+    with pytest.raises(ValueError, match="finite, non-negative"):
+        ScoreTable(run).write(
+            [ArmScores(arm="reference", elapsed_s=-5.0, results=[_case_result("c0")])]
+        )
+
+
+def test_a_zero_elapsed_is_accepted(tmp_path):
+    """Zero is a measurement, not a placeholder: a trivially fast arm on a coarse
+    clock reports it honestly, and rejecting it would fail a legitimate run."""
+    run = tmp_path / "run"
+    ScoreTable(run).write(
+        [ArmScores(arm="reference", elapsed_s=0.0, results=[_case_result("c0")])]
+    )
+    assert ScoreTable(run).read()[0].elapsed_s == 0.0
 
 
 # --- Rejections at write ------------------------------------------------------
@@ -516,6 +567,58 @@ def test_read_rejects_a_table_written_by_a_narrower_build(tmp_path):
     pq.write_table(narrowed, run / SCORES_FILE)
 
     with pytest.raises(ValueError, match=r"different schema.*arm.*elapsed_s"):
+        ScoreTable(run).read()
+
+
+def test_read_rejects_a_row_with_neither_join_key(tmp_path):
+    """A null `case_id` would rebuild as `PropertyResult(case_id=None)`: an orphan
+    that joins to nothing, carrying a None in a column declared `str`, where a
+    downstream `.startswith` becomes an AttributeError. `read` already re-checks
+    the verdict vocabulary and the column set; this invariant is equally visible.
+    """
+    run = tmp_path / "run"
+    ScoreTable(run).write(
+        [ArmScores(arm="reference", elapsed_s=1.0, results=[_case_result("c0")])]
+    )
+    _patch_column(run, "case_id", [None], pa.string())
+
+    with pytest.raises(ValueError, match="exactly one of case_id/group_id"):
+        ScoreTable(run).read()
+
+
+def test_read_rejects_a_row_with_both_join_keys(tmp_path):
+    """Both keys set joins twice, counting one verdict against two units of analysis."""
+    run = tmp_path / "run"
+    ScoreTable(run).write(
+        [ArmScores(arm="reference", elapsed_s=1.0, results=[_case_result("c0")])]
+    )
+    _patch_column(run, "group_id", ["g0"], pa.string())
+
+    with pytest.raises(ValueError, match="exactly one of case_id/group_id"):
+        ScoreTable(run).read()
+
+
+def test_a_join_key_failure_on_read_names_the_score_file(tmp_path):
+    run = tmp_path / "run"
+    ScoreTable(run).write(
+        [ArmScores(arm="reference", elapsed_s=1.0, results=[_case_result("c0")])]
+    )
+    _patch_column(run, "case_id", [None], pa.string())
+
+    with pytest.raises(ValueError, match=SCORES_FILE):
+        ScoreTable(run).read()
+
+
+def test_an_unknown_tier_names_the_score_file(tmp_path):
+    """`PropertyResult.__post_init__` rejects the tier but names no file, which is
+    inconsistent with every other refusal on this read path."""
+    run = tmp_path / "run"
+    ScoreTable(run).write(
+        [ArmScores(arm="reference", elapsed_s=1.0, results=[_case_result("c0")])]
+    )
+    _patch_column(run, "tier", [7], pa.int64())
+
+    with pytest.raises(ValueError, match=rf"tier must be in.*{SCORES_FILE}"):
         ScoreTable(run).read()
 
 
