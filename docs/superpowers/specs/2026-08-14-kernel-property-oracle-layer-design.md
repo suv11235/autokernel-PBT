@@ -311,6 +311,38 @@ interesting.
 **KernelBench subset for reporting**, so headline numbers are comparable to published baselines.
 Note its PyTorch-reference framing biases toward the reference arm; that bias must be stated.
 
+## 6.5 A methodological finding from building the harness
+
+The project's own fairness criterion — `REPLAY_FAIRNESS`, which certifies that competing oracle
+arms score byte-identical executions — passed **vacuously through three successive fixes**. Each
+fix was correct and each exposed the next layer:
+
+1. The fingerprint covered `case.tensors` (the field named "input") but not `row.outputs`, which
+   is what the arms actually score. A "repairing" arm flipped 7 of 9 detections while the
+   criterion stayed green.
+2. Fixed. The record-fidelity witness then covered inputs only, so a read path that repaired
+   outputs identically on every call destroyed 7 of 7 detections — an identically-corrupting read
+   is a fixed point.
+3. Fixed. `row_fingerprint` still omitted `case.metadata()`. An arm that merely relabelled
+   `case.relation` cost 14 of 14 detections, because `ShiftInvariance` finds its base and partner
+   *by* that field — with every tensor byte untouched.
+
+Separately, the "which assertion catches this?" defect appeared three times and **relocated rather
+than recurred**: closing the gap on one arm's assertion made the other arm's deletable with zero
+test failures, because the surviving assertion subsumed it.
+
+**The invariant that actually works is not "every assertion has a saboteur" but "every assertion
+is the *unique* catcher for at least one saboteur."** Operationally: parametrize saboteurs, pair
+each with the exact message expected to catch it, and verify by deleting each assertion in turn
+that precisely its own cases fail. Without the message pairing, a saboteur caught by an earlier
+assertion silently certifies a later one it never reached.
+
+Two things follow for the paper. First, this is direct evidence for the motivating claim that
+"the property passed" is uninformative without a demonstrated ability to fail — observed in our
+own instrumentation, not only in the kernels under test. Second, any detection-rate number
+produced by this harness should be accompanied by the saboteur matrix that establishes the
+harness could have failed.
+
 ## 7. Evaluation
 
 Metrics, in the order they become measurable:
