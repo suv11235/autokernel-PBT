@@ -6,11 +6,12 @@ Phase 1 built every layer but recorded too little to measure. Four of the five r
 cannot be computed from the persisted artifacts:
 
 - **Bug-catching power** and **false-positive rate** need to join a row to *which kernel produced
-  it* and *whether that kernel was known-broken*. The execution table records neither.
-- **Cost-per-bug** needs oracle evaluation timed. Only kernel wall time is recorded.
-- The **tolerance-free split** is correct in memory but `PropertyResult` is never persisted.
+  it* and *whether that kernel was known-broken*. The execution table recorded neither.
+- **Cost-per-bug** needs oracle evaluation timed. Only kernel wall time was recorded.
+- The **tolerance-free split** was correct in memory but `PropertyResult` was never persisted.
 
-Separately, the pipeline is composed only in test code, twice, and the two copies already differ.
+Separately, the pipeline was composed only in test code, twice, and the two copies had already
+diverged.
 
 ## Scope
 
