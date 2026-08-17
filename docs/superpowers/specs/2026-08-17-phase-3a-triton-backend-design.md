@@ -37,6 +37,21 @@ is the pairwise-summation bound. NumPy reduces pairwise; Triton reduces in a blo
 whose shape depends on `BLOCK_SIZE` and `num_warps`. Whether `log2(n)` holds against Triton's
 actual tree is measurable here and has never been checked.
 
+### The ladder cannot answer the tolerance question on its own
+
+Measured, not assumed. The ladder's reduction lengths are `{1, 7, 8, 16, 32, 33, 64, 129}` —
+`log2(n)` from **0 to 7**. The CPU measurements that established `log2(n)` as the normalization
+swept `n` to 16384, i.e. `log2(n)` to **14**. The ladder therefore covers half the dynamic range,
+concentrated at the low end where the ratio is noisiest.
+
+So the tolerance validation needs **its own shape set**: a tolerance-sweep domain with reduction
+lengths reaching ~16384, recorded in the same session as a separate task rather than improvised
+on the clock. It stays cheap — see §8 — but it has to be planned.
+
+This is the same overclaim the next section warns about, and this design nearly made it: the
+ladder is calibrated for property *detection*, not for tolerance sweeps, and the two want
+different shapes.
+
 ### A correction to carry into the plan
 
 Parent design §5.3 warns that NVIDIA tensor cores accumulate in round-toward-zero, "a systematic
@@ -151,7 +166,32 @@ CI stays CPU-only and green. GPU tests are run by hand on the rented instance.
 6. Score offline on CPU with the existing four arms. Report tier-1 transfer and the tolerance
    result.
 
-## 8. Out of scope
+
+## 8. Operations: Lambda Cloud
+
+**Rent the cheapest GPU, not the biggest.** A full-ladder run is ~28 KB of tensor payload across
+nine trivial kernels; the tolerance sweep adds little. This is not a compute-bound workload, and
+none of the results depend on the device being fast. What matters is that compute capability is
+*recorded* — it changes register limits, occupancy and SASS introspection — not that it is high.
+Renting a large instance to run this buys nothing but a larger bill.
+
+**Lambda Stack pins the toolchain.** torch, CUDA and triton versions come from the instance
+image rather than from `pyproject.toml`. Telemetry records all three precisely because two runs
+taken on different images are not automatically comparable, and without the versions on the row
+that difference is invisible.
+
+**Instance storage is ephemeral.** The run directory must be copied off before the instance is
+terminated. At this size that is trivial, which is exactly why it is the kind of step that gets
+assumed rather than done — it belongs in the runbook, not in someone's memory.
+
+**Arrive ready.** Billing is hourly and the dominant avoidable cost is debugging setup on the
+clock. One bootstrap script, everything else verified locally beforehand, and the smoke session
+(§7 step 4) exists to absorb whatever the first contact with real hardware breaks.
+
+**`compute-sanitizer` ships with the CUDA toolkit**, so it is already present on the instance for
+Phase 3b without extra provisioning. Nothing in 3a uses it.
+
+## 9. Out of scope
 
 - Tier-2 properties and the `compute-sanitizer` / `ncu` integration (Phase 3b)
 - The mutation corpus and the four metrics (Phase 2b)
@@ -159,13 +199,16 @@ CI stays CPU-only and green. GPU tests are run by hand on the rented instance.
 - GEMM and attention — and therefore any claim about tensor-core round-toward-zero
 - Autotuning, and any search over launch configurations
 
-## 9. Open questions
+## 10. Open questions
 
 1. How many launch configurations per task? One fixed config is simplest and makes the run a
    clean tier-1 transfer measurement; sweeping `BLOCK_SIZE` would additionally probe the
    block-size sensitivity §2 mentions, at a multiple of the hardware time.
-2. Which GPU? Compute capability changes register limits, occupancy and available SASS
-   introspection, and the telemetry should record it rather than assume it.
+2. Which GPU *model* on Lambda? Settled in outline by §8 — take the cheapest, since the
+   workload is ~28 KB and nine trivial kernels — but compute capability still changes register
+   limits, occupancy and SASS introspection, so the telemetry records it rather than assuming
+   it. Whether a *second* capability is worth renting for a cross-capability comparison is open,
+   and is a Phase 3b question rather than a 3a one.
 3. Does `log2(n)` need a Triton-specific reduction length? Triton reduces within a block and then
    across blocks, so the effective tree depth may not be `log2(row_length)`. If the first run
    shows a systematic drift in the correct-kernel ratio, that is the likely cause and it is a
