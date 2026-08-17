@@ -1,0 +1,30 @@
+# Acceptance contract for the at-scale softmax task.
+#
+# The same properties as softmax, because it IS softmax -- the task exists to run softmax at a size where
+# the GPU is actually loaded -- grid depth beyond the SM count and a tile width that
+# varies with the shape, so the compiled telemetry carries signal instead of a constant.
+#
+# No SHIFT_INVARIANCE criterion: the domain declares no relations, so there is no
+# partner case for a group property to read, and a contract naming one would build an
+# oracle that abstains on every group.
+task_id: softmax_at_scale
+version: 1
+
+criteria:
+  - id: FINITE_OUTPUT
+    description: no output element is NaN or Inf, on any input the domain generates
+    check:
+      type: property
+      property: outputs_are_finite
+
+  - id: UNIT_INTERVAL
+    description: every output element is a probability, lying in [0, 1] exactly
+    check:
+      type: property
+      property: values_in_unit_interval
+
+  - id: ROW_SUMS
+    description: each row of the output sums to one within its dtype's rounding budget
+    check:
+      type: property
+      property: rows_sum_to_one

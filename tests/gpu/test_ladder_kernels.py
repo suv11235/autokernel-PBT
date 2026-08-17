@@ -41,11 +41,10 @@ def test_the_triton_kernel_agrees_with_its_numpy_reference(task_id, torch_cuda, 
     from kernels.triton.ladder import KERNELS
 
     backend = TritonBackend()
-    kernel = KERNELS[task_id]()
     task = TASKS[task_id]
     for group in Generator(task.domain, seed=0).generate(len(task.domain.shapes)):
         for case in group.cases:
-            result = backend.run(kernel, case)
+            result = backend.run(KERNELS[task_id](case.shape[-1]), case)
             assert result.status is Status.OK, result.error
             expected = REFERENCES[task_id](x=case.tensors["x"])
             # Loose on purpose: this asserts the port is not grossly wrong. How close
@@ -68,7 +67,7 @@ def test_compiled_telemetry_is_populated_on_device(task_id, torch_cuda, triton_m
 
     task = TASKS[task_id]
     group = Generator(task.domain, seed=0).generate(len(task.domain.shapes))[0]
-    result = TritonBackend().run(KERNELS[task_id](), group.base)
+    result = TritonBackend().run(KERNELS[task_id](group.base.shape[-1]), group.base)
     assert result.status is Status.OK, result.error
     for key in ("n_regs", "shared_bytes", "num_warps"):
         assert result.telemetry[key] is not MISSING, f"{key} came back MISSING on device"
@@ -81,13 +80,13 @@ def test_a_kernel_that_writes_to_its_input_is_caught_on_device(torch_cuda, trito
     proves it is actually raised, which is the half that could silently never fire.
     """
     from autokernel_pbt.props.backends.triton_kernel import InputMutatedError, TritonKernel
-    from kernels.triton.ladder import BLOCK_SIZE, _launcher
+    from kernels.triton.ladder import _launcher, block_for
 
     kernel = TritonKernel(
         kernel_id="vandal",
         jit_fn=_vandal_kernel,
         grid=lambda shape, ce: (shape[0],),
-        constexprs={"BLOCK": BLOCK_SIZE},
+        constexprs={"BLOCK": block_for(8)},
         launcher=_launcher(_vandal_kernel),
     )
     with pytest.raises(InputMutatedError):

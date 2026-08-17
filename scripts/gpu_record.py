@@ -47,12 +47,15 @@ def main() -> int:
     # main recall mechanism.
     n_groups = args.n_groups or len(task.domain.shapes)
 
-    kernel = KERNELS[args.task]()
     backend = TritonBackend()
 
     results = []
     for group in Generator(task.domain, seed=args.seed).generate(n_groups):
         for case in group.cases:
+            # One kernel per shape: BLOCK is derived from the row width, so a new
+            # shape means a new compiled artifact -- which is precisely why the
+            # compiled telemetry now varies instead of being constant.
+            kernel = KERNELS[args.task](case.shape[-1])
             result = backend.run(kernel, case)
             result.kernel_id = kernel.kernel_id
             # Stated correct, not "not stated": these are the reference ports, and
