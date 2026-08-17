@@ -19,13 +19,13 @@ criteria:
     description: the declarative arm fails a kernel that violates a declared property
     check:
       type: unit_test
-      test: tests/unit/props/test_oracle.py::test_declarative_oracle_fails_a_violating_kernel
+      test: tests/unit/props/test_oracle.py::test_declarative_oracle_catches_a_missing_normalization
 
   - id: HYBRID_ARM_COMPOSES
     description: the hybrid arm reports both its declarative and reference components
     check:
       type: unit_test
-      test: tests/unit/props/test_oracle.py::test_hybrid_oracle_reports_both_components
+      test: tests/unit/props/test_oracle.py::test_hybrid_concatenates_both_arms_when_it_does_not_short_circuit
 
   - id: FOUR_ARMS_SCORE_ONE_RUN
     description: one recorded run is scored by all four arms

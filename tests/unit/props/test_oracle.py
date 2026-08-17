@@ -878,3 +878,4 @@ def test_allclose_arm_rejects_an_empty_group():
     # and quietly add a group that judged nothing to the detection denominator.
     with pytest.raises(ValueError, match="allclose"):
         _allclose().evaluate([])
+
