@@ -36,7 +36,7 @@ packages = ["src/autokernel_pbt"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = ["src", "."]
 addopts = "-ra --strict-markers"
 # Warnings are a fail-loud channel, not advisory noise: without this, sediment
 # accumulates in the summary until a genuinely new warning becomes invisible.

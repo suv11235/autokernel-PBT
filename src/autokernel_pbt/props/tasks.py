@@ -234,9 +234,47 @@ LAYERNORM = Task(
 )
 
 
+#: Powers of two spanning log2(n) = 3..14, plus two non-power-of-two lengths so the
+#: sweep is not blind to tail handling. Few rows per shape: the quantity under study
+#: is the reduction length, and extra rows buy variance reduction at a linear cost in
+#: hardware time.
+_SWEEP_SHAPES: tuple[tuple[int, ...], ...] = (
+    (4, 8),
+    (4, 64),
+    (4, 512),
+    (4, 4096),
+    (4, 16384),
+    (4, 129),
+    (4, 4095),
+)
+
+#: Not a new op -- softmax again, over a much wider range of reduction lengths.
+#:
+#: The ladder spans log2(n) from 0 to 7; the CPU measurements that chose log2(n) as
+#: the reference arm's normalization swept to 16384, log2 = 14. Measuring the
+#: tolerance on the ladder alone would cover half the dynamic range, concentrated at
+#: the low end where the ratio is noisiest, so this task exists to make the
+#: normalization question answerable on device at all.
+#:
+#: It reuses ``softmax_reference`` deliberately. A separate reference would make these
+#: numbers incomparable with the softmax numbers already recorded on CPU, which is the
+#: comparison the whole exercise rests on.
+TOLERANCE_SWEEP = Task(
+    task_id="tolerance_sweep",
+    domain=InputDomain(
+        task_id="tolerance_sweep",
+        tensors=(TensorSpec(name="x", dtype="float32", distribution="normal"),),
+        shapes=_SWEEP_SHAPES,
+        relations=(),
+    ),
+)
+
+
 #: Name -> task. Keyed off each task's own ``task_id`` so a key and the ids
 #: stamped into its recorded rows cannot disagree.
-TASKS: dict[str, Task] = {task.task_id: task for task in (RELU, SOFTMAX, LAYERNORM)}
+TASKS: dict[str, Task] = {
+    task.task_id: task for task in (RELU, SOFTMAX, LAYERNORM, TOLERANCE_SWEEP)
+}
 
 #: Reference implementation per task, for the reference arm. Kept separate from
 #: ``Task`` because a reference is harness-side and not serializable: ``Task`` is
@@ -246,4 +284,5 @@ REFERENCES = {
     RELU.task_id: relu_reference,
     SOFTMAX.task_id: softmax_reference,
     LAYERNORM.task_id: layernorm_reference,
+    TOLERANCE_SWEEP.task_id: softmax_reference,
 }
