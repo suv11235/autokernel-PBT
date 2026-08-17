@@ -22,7 +22,53 @@ intended rather than cutting a corner.
 
 Concretely, Phase 3a needs none of Phase 2b. It needs a backend, telemetry, and kernels.
 
-## 2. What the first run produces
+## 2. Why Triton and not CUDA C++
+
+CUDA is the *platform*; Triton and CUDA C++ are two authoring layers on it, and Lambda provides
+the platform either way. Both compile to PTX/SASS on the same silicon. They differ in what the
+programmer decides: CUDA C++ is written per **thread**, with layout, coalescing, shared-memory
+staging and synchronization all explicit; Triton is written per **tile**, and the compiler makes
+those decisions.
+
+That difference is the reason, not a detail.
+
+**The corpus is a taxonomy of tile-compiler bugs.** The ISSTA 2026 study this project's mutation
+corpus derives from characterizes 301 *tile-program codegen* bugs — defects in what the tile
+compiler decides. CUDA C++ has no tile compiler, so much of the taxonomy has no CUDA analogue at
+all. The paper makes the contrast itself (implication I4): tile DSLs auto-generate launch configs
+from loop nests, "unlike manual control in CUDA."
+
+Of the 34% of fault classes the NumPy backend cannot reach:
+
+| Category | Bugs | Exists in CUDA C++? |
+|---|---|---|
+| IR construction and transformation | 49 | No — these are compiler passes |
+| Tile mapping and launch | 19 | No — the programmer writes launch geometry by hand |
+| Control flow and scheduling | 16 | Partly — masks and predicates are compiler-synthesized in Triton |
+
+A CUDA C++ backend would therefore be a backend for a *different* fault taxonomy than the one
+Phase 2b is built on.
+
+Three supporting reasons:
+
+- **Telemetry is in-process.** Triton's JIT exposes registers per thread, spill counts and
+  shared-memory bytes directly off the compiled artifact. CUDA C++ through
+  `torch.utils.cpp_extension` means an out-of-process nvcc build and scraping `-Xptxas -v` or
+  `cuobjdump` — the same numbers, considerably more machinery, for the schema §4 depends on.
+- **It transfers to NKI.** Trainium's NKI is also a Python tile DSL. Triton's abstractions carry
+  over; CUDA C++'s largely do not, and the translation workstream is Triton→NKI shaped.
+- **It matches the literature.** KernelBench and the LLM kernel-generation work this project
+  reports against are predominantly Triton and PyTorch.
+
+**CUDA C++ is not excluded**, and the README's "CUDA and Triton today" still stands. The
+``Backend`` protocol is backend-agnostic and parent design §3.4's tier-2 catalogue names
+CUDA-specific properties (out-of-bounds, races, launch-bounds, register spill) alongside Triton's.
+It is a legitimate later backend; it is simply not the one whose bugs the corpus describes.
+
+Note that this does **not** gate the sanitizer work: `compute-sanitizer` operates on any CUDA
+binary, including the PTX Triton emits, so Phase 3b needs no CUDA C++ backend either.
+
+## 3. What the first run produces
 
 Two results, neither of which requires a mutation corpus:
 
@@ -46,7 +92,7 @@ concentrated at the low end where the ratio is noisiest.
 
 So the tolerance validation needs **its own shape set**: a tolerance-sweep domain with reduction
 lengths reaching ~16384, recorded in the same session as a separate task rather than improvised
-on the clock. It stays cheap — see §8 — but it has to be planned.
+on the clock. It stays cheap — see §9 — but it has to be planned.
 
 This is the same overclaim the next section warns about, and this design nearly made it: the
 ladder is calibrated for property *detection*, not for tolerance sweeps, and the two want
@@ -63,7 +109,7 @@ GEMM and attention, and it should not be claimed as validated by this run.
 What this run does validate is reduction-order and block-size sensitivity, which is a different
 and smaller claim. Saying otherwise would overstate the result.
 
-## 3. Telemetry: the one irreversible decision
+## 4. Telemetry: the one irreversible decision
 
 A missing counter costs another hardware run. Everything else is re-derivable offline for free,
 so the schema is over-specified deliberately.
@@ -95,7 +141,7 @@ recorded before a field existed from a run where the field was genuinely absent 
 between "not captured" and "captured as zero" is exactly the kind of thing that silently
 corrupts an aggregate.
 
-## 4. The kernel interface
+## 5. The kernel interface
 
 Parent design §5.1 already fixes the shape: kernel *source* stays backend-native, and "the
 harness treats a kernel as an artifact plus a compile/launch adapter."
@@ -117,7 +163,7 @@ The protocol is unchanged. `NumpyBackend` keeps taking plain functions; the Trit
 requires an adapter, and says so with a clear error rather than a `TypeError` from inside a
 launch.
 
-## 5. Three device realities the CPU backend never faced
+## 6. Three device realities the CPU backend never faced
 
 **Compilation is a distinct failure mode, and it is lazy.** Triton compiles on first call, so a
 compile error surfaces during execution rather than before it. `Status.COMPILE_ERROR` already
@@ -140,7 +186,7 @@ anything — it is an argument *for* record/replay, since the recorded execution
 arms score and re-execution is never required. It does mean a "re-run and compare" test is not
 available on device, and the plan must not assume one.
 
-## 6. CI and local development
+## 7. CI and local development
 
 This is developed on a machine with no CUDA, so the backend is written blind and cannot be run
 until hardware. Two mitigations:
@@ -154,7 +200,7 @@ until hardware. Two mitigations:
 
 CI stays CPU-only and green. GPU tests are run by hand on the rented instance.
 
-## 7. Sequence
+## 8. Sequence
 
 1. `TritonKernel` adapter and the telemetry schema, with CPU contract tests.
 2. `TritonBackend`, `gpu`-marked.
@@ -167,7 +213,7 @@ CI stays CPU-only and green. GPU tests are run by hand on the rented instance.
    result.
 
 
-## 8. Operations: Lambda Cloud
+## 9. Operations: Lambda Cloud
 
 **Rent the cheapest GPU, not the biggest.** A full-ladder run is ~28 KB of tensor payload across
 nine trivial kernels; the tolerance sweep adds little. This is not a compute-bound workload, and
@@ -186,12 +232,12 @@ assumed rather than done — it belongs in the runbook, not in someone's memory.
 
 **Arrive ready.** Billing is hourly and the dominant avoidable cost is debugging setup on the
 clock. One bootstrap script, everything else verified locally beforehand, and the smoke session
-(§7 step 4) exists to absorb whatever the first contact with real hardware breaks.
+(§8 step 4) exists to absorb whatever the first contact with real hardware breaks.
 
 **`compute-sanitizer` ships with the CUDA toolkit**, so it is already present on the instance for
 Phase 3b without extra provisioning. Nothing in 3a uses it.
 
-## 9. Out of scope
+## 10. Out of scope
 
 - Tier-2 properties and the `compute-sanitizer` / `ncu` integration (Phase 3b)
 - The mutation corpus and the four metrics (Phase 2b)
@@ -199,12 +245,12 @@ Phase 3b without extra provisioning. Nothing in 3a uses it.
 - GEMM and attention — and therefore any claim about tensor-core round-toward-zero
 - Autotuning, and any search over launch configurations
 
-## 10. Open questions
+## 11. Open questions
 
 1. How many launch configurations per task? One fixed config is simplest and makes the run a
    clean tier-1 transfer measurement; sweeping `BLOCK_SIZE` would additionally probe the
-   block-size sensitivity §2 mentions, at a multiple of the hardware time.
-2. Which GPU *model* on Lambda? Settled in outline by §8 — take the cheapest, since the
+   block-size sensitivity §3 mentions, at a multiple of the hardware time.
+2. Which GPU *model* on Lambda? Settled in outline by §9 — take the cheapest, since the
    workload is ~28 KB and nine trivial kernels — but compute capability still changes register
    limits, occupancy and SASS introspection, so the telemetry records it rather than assuming
    it. Whether a *second* capability is worth renting for a cross-capability comparison is open,
