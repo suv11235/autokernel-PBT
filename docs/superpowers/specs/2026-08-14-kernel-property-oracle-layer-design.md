@@ -251,16 +251,39 @@ accumulator (123.7), a 1e-4 denominator error (70.0), a 0.3% denominator error (
 correct kernel sits at 0.04, leaving 213×–779× headroom across n=8..16384. The baseline is no
 longer weaker than standard practice on this corpus.
 
-**Unresolved, recorded rather than reconciled.** Two independent measurement harnesses disagree on
-which normalization is *flattest*: one finds `log₂n` flat with `n=1` drifting 2.1×, the other finds
-`n=1` flattest (1.3×) and `log₂n` over-correcting (3.7×, in the conservative direction). Absolute
-magnitudes differ by a consistent 5×, so a setup difference — reference construction or residual
-scaling — remains unidentified. It does not change the choice: `log₂n` is the textbook pairwise
-bound rather than a fit to either dataset, and is safe under both. It would matter if `n=1` were
-revisited.
+**RESOLVED (2026-08-17).** Two independent measurement harnesses disagreed on which normalization
+is *flattest*: one found `log₂n` flat with `n=1` drifting 2.1×, the other found `n=1` flattest
+(1.3×) and `log₂n` over-correcting (3.7×), with absolute magnitudes differing by "a consistent 5×"
+and the setup difference unidentified.
 
-Whether to additionally report plain `allclose` as a fourth arm — pre-empting the "your baseline is
-weak" objection entirely, at low cost — is undecided.
+The gap is `log₂(n_reduction) / log₂(n_rowcount)`. One harness took `n` from the **wrong axis** — a
+length fixed across the sweep — which makes its `log₂n` column an un-normalized ratio in disguise:
+flat by construction, and larger by exactly that factor. Reproduced with an analytically exact
+multiplier (3, 4, 5, 6, 7 at n = 64…16384 over 4 rows, i.e. `log₂(n)/2`) whose **mean over the
+swept range is 5** — the reported gap to the digit. It was called *consistent* because it was
+averaged over a range across which it in fact varies from 3 to 7.
+
+Both other candidates were ruled out by measurement: reference construction (recomputing from the
+original float64 draws rather than the float32 input) and residual scaling (inf-norm vs 2-norm,
+mean, sum) each move the drift but neither makes `log₂n` flat or flattest. Full construction,
+tables and threats: `docs/measurements/2026-08-17-normalization-discrepancy-resolved.md`.
+
+`log₂n` is unchanged and was never at risk — it is the textbook pairwise bound rather than a fit to
+either dataset. What changes is that **`n=1` now deserves the revisit this paragraph flagged**: on
+the corrected construction `1` is flatter than `log₂n` (1.2–1.3× against 2.3–4.1×) under every
+reference and residual variant measured, and the reason it was not revisited — that two harnesses
+disagreed — no longer holds. Flatness is only one criterion; `1` is also *stricter*, and the
+`allclose` false-positive result on layernorm shows that stricter is not free. Deciding it needs
+the mutation corpus, so it belongs to Phase 2b.
+
+No code change followed. `residual_ratio`'s `n=` contract was already correct and already tested;
+the defect was in a measurement harness. The library contract that made it diagnosable is in
+`CLAUDE.md`: *the default `n` is the last-axis length, which is wrong for an already-reduced array.*
+
+**Decided (feature 0006):** plain `allclose` is carried as a fourth arm. It has already earned its
+place — on a correct layernorm kernel it false-positives on 5 of 9 groups while the reference arm
+passes all nine, a gap invisible on softmax alone
+(`docs/measurements/2026-08-16-allclose-layernorm-false-positives.md`).
 
 *Shift invariance is only approximate in reduced precision, and the tolerance dominates.* In
 float16 a wide shift produces genuine deviations of 0.5–2 ulp (median 4.9e-4, p95 9.9e-4 against
