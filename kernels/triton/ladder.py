@@ -82,7 +82,7 @@ def _launcher(jit_kernel):
     happened.
     """
 
-    def launch(*, grid, constexprs, **inputs):
+    def launch(*, grid, constexprs, record_compiled, **inputs):
         x = inputs["x"]
         cols = x.shape[-1]
         xd = torch.as_tensor(x, device="cuda")
@@ -91,7 +91,10 @@ def _launcher(jit_kernel):
         # The input-mutation check, on the device buffer -- the only place it can
         # actually fire. See InputMutatedError for why the backend cannot do this.
         before = device_digest(xd)
-        jit_kernel[grid](xd, yd, cols, **constexprs)
+        # Triton's launch RETURNS the CompiledKernel. Discarding it leaves the
+        # adapter with no artifact and every compiled telemetry field MISSING.
+        compiled = jit_kernel[grid](xd, yd, cols, **constexprs)
+        record_compiled(compiled)
         if device_digest(xd) != before:
             msg = "kernel modified its input tensor(s) ['x'] on device"
             raise InputMutatedError(msg)

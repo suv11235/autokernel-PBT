@@ -129,6 +129,26 @@ def test_compiled_is_populated_once_recorded():
     assert adapter.compiled is sentinel
 
 
+def test_the_launcher_is_given_a_working_record_compiled_callback():
+    """Without this the compiled artifact is never captured.
+
+    Triton's launch returns the CompiledKernel; a launcher that discards it leaves
+    the adapter with `compiled = None`, and every compiled telemetry field -- n_regs,
+    spills, shared memory -- reads MISSING. That is not a hypothetical: the first
+    hardware run hit exactly this, and the schema looked complete while carrying
+    nothing.
+    """
+    sentinel = object()
+
+    def launcher(*, grid, constexprs, record_compiled, **inputs):
+        record_compiled(sentinel)
+        return np.zeros((2, 3), dtype=np.float32)
+
+    adapter = _adapter(launcher=launcher)
+    adapter(x=np.ones((2, 3), dtype=np.float32))
+    assert adapter.compiled is sentinel
+
+
 def test_a_launcher_returning_a_non_array_is_a_contract_error():
     with pytest.raises(OutputContractError):
         _adapter(launcher=lambda **kw: None)(x=np.ones((2, 3), dtype=np.float32))

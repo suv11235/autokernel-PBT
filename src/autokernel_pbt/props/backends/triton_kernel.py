@@ -132,4 +132,18 @@ class TritonKernel:
         # If it computed its own, the recorded launch telemetry would be a label next
         # to the behaviour rather than a description of it, and the two could drift
         # apart silently -- with the artifacts reporting a grid that never launched.
-        return single_output(self.launcher(grid=grid, constexprs=self.constexprs, **writable))
+        #
+        # `record_compiled` is a callback rather than a return value because Triton's
+        # launch returns the CompiledKernel *alongside* nothing else useful, and
+        # threading it back through the output would make every launcher return a
+        # tuple for the benefit of telemetry. Without this the artifact is never
+        # captured and every compiled field reads MISSING -- which is what the first
+        # hardware run actually found.
+        return single_output(
+            self.launcher(
+                grid=grid,
+                constexprs=self.constexprs,
+                record_compiled=self._record_compiled,
+                **writable,
+            )
+        )

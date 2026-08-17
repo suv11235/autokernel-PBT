@@ -15,6 +15,25 @@ from autokernel_pbt.props.tasks import REFERENCES, TASKS
 
 pytestmark = pytest.mark.gpu
 
+# Module-level, not inside a test: `@triton.jit` compiles from source and resolves
+# names against the decorated function's *globals*. A `tl` imported into a test
+# function's local scope is invisible to the compiler, which fails with a bare
+# `NameError('tl is not defined')` from inside the Triton frontend. importorskip
+# keeps a machine without triton skipping the module rather than failing collection.
+triton = pytest.importorskip("triton", reason="triton is not installed")
+tl = pytest.importorskip("triton.language", reason="triton is not installed")
+
+
+@triton.jit
+def _vandal_kernel(x_ptr, y_ptr, n_cols, BLOCK: tl.constexpr):
+    """Writes to its INPUT pointer: the defect the integrity check exists for."""
+    row = tl.program_id(0)
+    offs = tl.arange(0, BLOCK)
+    mask = offs < n_cols
+    x = tl.load(x_ptr + row * n_cols + offs, mask=mask, other=0.0)
+    tl.store(x_ptr + row * n_cols + offs, x + 1.0, mask=mask)
+    tl.store(y_ptr + row * n_cols + offs, x, mask=mask)
+
 
 @pytest.mark.parametrize("task_id", ["relu", "softmax", "layernorm"])
 def test_the_triton_kernel_agrees_with_its_numpy_reference(task_id, torch_cuda, triton_module):
@@ -61,28 +80,15 @@ def test_a_kernel_that_writes_to_its_input_is_caught_on_device(torch_cuda, trito
     The CPU test in tests/unit/ only proves the backend CLASSIFIES the error. This
     proves it is actually raised, which is the half that could silently never fire.
     """
-    import triton
-    import triton.language as tl
-
     from autokernel_pbt.props.backends.triton_kernel import InputMutatedError, TritonKernel
     from kernels.triton.ladder import BLOCK_SIZE, _launcher
 
-    @triton.jit
-    def _vandal(x_ptr, y_ptr, n_cols, BLOCK: tl.constexpr):
-        row = tl.program_id(0)
-        offs = tl.arange(0, BLOCK)
-        mask = offs < n_cols
-        x = tl.load(x_ptr + row * n_cols + offs, mask=mask, other=0.0)
-        # Writes to the INPUT pointer: the defect the check exists for.
-        tl.store(x_ptr + row * n_cols + offs, x + 1.0, mask=mask)
-        tl.store(y_ptr + row * n_cols + offs, x, mask=mask)
-
     kernel = TritonKernel(
         kernel_id="vandal",
-        jit_fn=_vandal,
+        jit_fn=_vandal_kernel,
         grid=lambda shape, ce: (shape[0],),
         constexprs={"BLOCK": BLOCK_SIZE},
-        launcher=_launcher(_vandal),
+        launcher=_launcher(_vandal_kernel),
     )
     with pytest.raises(InputMutatedError):
         kernel(x=np.ones((4, 8), dtype=np.float32))
