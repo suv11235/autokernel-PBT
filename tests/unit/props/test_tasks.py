@@ -144,3 +144,77 @@ def test_softmax_reference_is_shift_invariant():
     x = rng.normal(size=(4, 8)).astype(np.float32)
     shift = np.array([[40.0], [-40.0], [80.0], [0.0]], dtype=np.float32)
     assert np.allclose(softmax_reference(x), softmax_reference(x + shift), atol=1e-6)
+
+
+# --------------------------------------------------------------------------
+# layernorm: the normalization rung (feature 0006)
+# --------------------------------------------------------------------------
+
+
+def test_layernorm_is_registered():
+    assert "layernorm" in TASKS
+    assert TASKS["layernorm"].domain.task_id == "layernorm"
+
+
+def test_layernorm_reference_normalizes_each_row():
+    x = np.array([[1.0, 2.0, 3.0, 4.0]], dtype=np.float32)
+    y = REFERENCES["layernorm"](x=x)
+    assert np.isclose(y.mean(), 0.0, atol=1e-6)
+    # Population variance (divide by n), not sample: the sample variance would sit a
+    # factor of sqrt(n/(n-1)) from every correct kernel.
+    assert np.isclose(y.var(), 1.0, atol=1e-4)
+
+
+def test_layernorm_reference_uses_population_not_sample_variance():
+    # Stated as its own test because the two differ by 8% at the ladder's (3, 7) rung,
+    # which dwarfs any tolerance and would book every correct kernel as a caught bug.
+    x = np.arange(7, dtype=np.float32).reshape(1, 7)
+    y = REFERENCES["layernorm"](x=x)
+    assert np.isclose(float(np.var(y, axis=-1)[0]), 1.0, atol=1e-3)
+
+
+def test_layernorm_reference_preserves_dtype():
+    x = np.ones((2, 4), dtype=np.float32)
+    assert REFERENCES["layernorm"](x=x).dtype == np.float32
+
+
+def test_layernorm_reference_survives_a_constant_row():
+    # Zero variance would divide by zero. eps is what makes this defined, and a
+    # constant row is reachable from the ladder's (1, 1) and (17, 1) rungs.
+    x = np.full((1, 4), 3.0, dtype=np.float32)
+    y = REFERENCES["layernorm"](x=x)
+    assert np.all(np.isfinite(y))
+    assert np.allclose(y, 0.0)
+
+
+def test_layernorm_reference_is_shift_invariant():
+    # The law ShiftRows exercises. Unlike softmax's -- which breaks only when exp
+    # overflows -- this one is exact in real arithmetic: subtracting the row mean
+    # removes any per-row constant, so the relation is non-vacuous at any scale.
+    x = np.array([[1.0, 2.0, 3.0, 4.0]], dtype=np.float32)
+    shifted = x + np.float32(100.0)
+    assert np.allclose(
+        REFERENCES["layernorm"](x=x), REFERENCES["layernorm"](x=shifted), atol=1e-4
+    )
+
+
+def test_layernorm_contract_builds_an_oracle(repo_root):
+    """The criterion LAYERNORM_CONTRACT_BUILDS_AN_ORACLE.
+
+    The contract file *is* the oracle: adding or removing a criterion changes what
+    the declarative arm can catch. All three named properties must survive the build,
+    and shift_invariance is checked explicitly because it is a *group* property --
+    a test reading only case_properties would pass while the metamorphic half of the
+    contract had been silently dropped.
+    """
+    from autokernel_pbt.props.contract import load_contract, oracle_from_contract
+
+    contract = load_contract(repo_root / "kernels/tasks/layernorm/acceptance.yaml")
+    oracle = oracle_from_contract(contract)
+    names = {p.name for p in (*oracle.case_properties, *oracle.group_properties)}
+    assert "rows_have_zero_mean" in names
+    assert "rows_have_unit_variance" in names
+    assert "shift_invariance" in names
+    # No unit-interval criterion: a layernorm output is unbounded in both directions,
+    # so asserting a range would fail every correct kernel.
+    assert "values_in_unit_interval" not in names
