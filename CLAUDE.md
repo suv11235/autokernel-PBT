@@ -80,6 +80,7 @@ Do not rediscover these.
 | Telemetry declares every key; unavailable ones carry `MISSING` | An omitted field makes "not captured" and "captured as zero" indistinguishable, and they mean opposite things about register pressure. |
 | Triton introspection is **probed**, not asserted | Register and spill counts have moved between the compiled kernel and its metadata across releases. A version bump must degrade one field, not abort a paid run. |
 | The input-mutation check lives in the **launcher**, not the backend | `readonly_inputs` protects the host array, and the backend holds only host arrays — a check there is structurally incapable of firing. Only the launcher holds the device buffers. |
+| `pythonpath` in pyproject is a **pytest** setting | It makes `kernels/` importable for tests and does nothing for a standalone script. The device tests passed while `gpu_record.py` died on import. |
 | A property's tolerance must model the **dominant** error mechanism | `rows_have_unit_variance` bounded float rounding and failed a correct reference: the real term is the reference's `eps`, `var/(var+eps)-1`, which grows as variance *shrinks* and is independent of `n`. |
 
 ---
@@ -131,10 +132,10 @@ acceptance criteria for the declarative and hybrid arms, and wired `HybridOracle
 4. **Authoring cost for layernorm is `n = 1`**
    (`docs/measurements/2026-08-16-layernorm-authoring-cost.md`), with its threats pre-registered.
    Extend it before the number is reported.
-5. **The first hardware run has not happened.** `TritonBackend`, the ladder ports and the
-   tolerance sweep are written but have never executed on a GPU — the development machine is
-   Darwin arm64 with no CUDA. Everything device-side is verified by *structure* only until the
-   smoke session (`docs/runbooks/2026-08-17-lambda-smoke-session.md`) runs.
+5. **`pyproject.toml` pins no numpy upper bound.** `numpy>=1.24` let pip install 2.x over Lambda
+   Stack's torch 2.7.0, which is built for 1.x, silently destroying torch's numpy interop. Fixed
+   on the instance with `numpy<2`; the constraint belongs in the project or the bootstrap script
+   before the next run. See `docs/measurements/2026-08-17-first-hardware-run.md` §5.
 6. `harness/correctness.py` still carries the five-stage skeleton the parent design §11 says the
    property layer replaces. It is load-bearing for features 0001 and 0002 and their acceptance
    criteria, so retiring it means retiring a feature — a scope decision, not cleanup.
