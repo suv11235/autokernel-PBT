@@ -710,3 +710,30 @@ def test_a_run_with_no_rows_has_no_corpus_fingerprint(tmp_path):
     empty = tmp_path / "empty"
     ExecutionTable(empty).write([])
     assert ExecutionTable(empty).corpus_fingerprint() == ""
+
+
+def test_case_spec_round_trips(tmp_path):
+    """The persistence half of CaseSpec's reason for existing.
+
+    In-memory regeneration is covered by test_spec.py. This is the other half: a run
+    that has been written and re-read must still carry the recipe, or an offline
+    shrinker reading it months later has nothing to reduce and must guess
+    (seed, task_id, group_index, shape, transforms) back out of the domain -- exactly
+    the retrofit spec.py's docstring argues must not be deferred.
+    """
+    from autokernel_pbt.props.spec import CaseSpec
+
+    spec = CaseSpec(
+        seed=11, task_id="softmax", group_index=3, shape=(2, 3), transforms=("shift_rows",)
+    )
+    result = _result("c0")
+    result.case_spec = spec
+    ExecutionTable(tmp_path / "run1").write([result])
+    assert ExecutionTable(tmp_path / "run1").read()[0].case_spec == spec
+
+
+def test_a_row_with_no_spec_round_trips_as_none(tmp_path):
+    # A hand-built group has no recipe, and inventing one would regenerate something
+    # else entirely. "" on disk must come back as None, not as an empty CaseSpec.
+    ExecutionTable(tmp_path / "run1").write([_result("c0")])
+    assert ExecutionTable(tmp_path / "run1").read()[0].case_spec is None

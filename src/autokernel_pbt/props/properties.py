@@ -36,7 +36,7 @@ from typing import Protocol, runtime_checkable
 
 import numpy as np
 
-from autokernel_pbt.props.backends.base import OUTPUT_NAME, ExecutionResult, Status
+from autokernel_pbt.props.backends.base import OUTPUT_NAME, PRIMARY_INPUT, ExecutionResult, Status
 from autokernel_pbt.props.case import BASE_RELATION
 from autokernel_pbt.props.relations import ShiftRows
 from autokernel_pbt.props.tolerance import (
@@ -368,7 +368,12 @@ class RowsHaveZeroMean:
         if not np.all(np.isfinite(y)):
             # OutputsAreFinite reports this; a mean over NaN is not a centering defect.
             return _result(self, Verdict.INCONCLUSIVE, _NONFINITE_DETAIL, case_id=case_id)
-        if y.dtype.kind not in "fc":
+        # "f" alone, not "fc". Admitting complex then casting it with
+        # np.asarray(..., float64) silently discards the imaginary part -- a wrong
+        # answer in production, and a ComplexWarning-turned-error under this project's
+        # filterwarnings=["error"], which is the same test-loud/production-silent
+        # asymmetry the errstate handling in oracle.py exists to avoid.
+        if y.dtype.kind != "f":
             # An int-returning kernel cannot be judged on a rounding budget expressed
             # in eps. FAIL would book a possibly-correct kernel as a caught bug.
             return _result(self, Verdict.INCONCLUSIVE, _EXACT_DTYPE_DETAIL, case_id=case_id)
@@ -422,16 +427,35 @@ class RowsHaveUnitVariance:
             return _result(self, Verdict.INCONCLUSIVE, reason, case_id=case_id)
         if not np.all(np.isfinite(y)):
             return _result(self, Verdict.INCONCLUSIVE, _NONFINITE_DETAIL, case_id=case_id)
-        if y.dtype.kind not in "fc":
+        if y.dtype.kind != "f":
             return _result(self, Verdict.INCONCLUSIVE, _EXACT_DTYPE_DETAIL, case_id=case_id)
+
+        # Abstain on rows whose INPUT was constant, not on rows whose OUTPUT came out
+        # flat. The two differ, and the difference is a whole class of bug: a kernel
+        # returning a zeroed or uninitialized buffer produces a flat output from a
+        # varying input, and keying off the output would abstain on it. Every other
+        # layernorm property passes such a kernel — zero mean holds, shift invariance
+        # holds because 0 == 0 — so the group would summarize to INCONCLUSIVE, the
+        # driver would refuse the whole run as an arm that established nothing, and
+        # *no scores would be written at all*, discarding the allclose, reference and
+        # hybrid verdicts that each caught it on every group.
+        #
+        # Keying off the input is also what `acceptance.yaml` already claims this
+        # property does: "except rows a constant input zeroed".
+        x = row.case.tensors.get(PRIMARY_INPUT)
+        if x is None or x.shape != y.shape:
+            # No usable input to key off — a task whose primary tensor is named
+            # differently, or a kernel that reshaped. Fall back to abstaining only
+            # when the whole output is flat, which is the pre-existing behaviour.
+            constant_rows = np.zeros(y.shape[:-1], dtype=bool) if y.ndim else np.array([False])
+        else:
+            constant_rows = np.ptp(np.asarray(x, dtype=np.float64), axis=-1) == 0.0
 
         wide = np.asarray(y, dtype=np.float64)
         variances = np.var(wide, axis=-1)
-        # A row that is identically zero came from a constant input; see the
-        # docstring. Judging it would fail every correct kernel on those rungs.
-        judged = variances[~np.isclose(variances, 0.0, atol=1e-12)]
+        judged = variances[~constant_rows]
         if judged.size == 0:
-            detail = "every row had zero variance, which a constant input makes correct"
+            detail = "every row had a constant input, which layernorm maps to zeros"
             return _result(self, Verdict.INCONCLUSIVE, detail, case_id=case_id)
 
         eps = float(np.finfo(y.dtype).eps)

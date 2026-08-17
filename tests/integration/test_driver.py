@@ -657,3 +657,73 @@ def test_arm_order_is_deterministic_for_a_seed():
     # A run must replay: same seed, same order, or two runs of "the same" experiment
     # are not comparable even in principle.
     assert arm_order(3) == arm_order(3)
+
+
+def test_arm_order_is_driven_by_its_own_seed_not_the_corpus_seed(
+    tmp_path: Path, repo_root: Path, monkeypatch
+):
+    """The randomization is only usable if it decouples from the inputs.
+
+    The experiment that consumes it is repeated timing of ONE corpus. Driving the
+    order from the corpus seed would make every repetition of seed=42 evaluate the
+    arms identically -- position bias fully systematic for exactly the measurement
+    the randomization exists to serve -- while varying the corpus seed to shake the
+    order changes the inputs too, confounding arm position with the corpus.
+
+    Asserted on the *wiring*, because it is no longer observable from the artifacts:
+    scores are persisted in canonical ARM_NAMES order, so evaluation order leaves no
+    trace on disk. An earlier version of this test only called ``arm_order`` directly
+    and passed even when ``run_task`` ignored ``arm_order_seed`` entirely.
+    """
+    import autokernel_pbt.props.driver as driver_module
+
+    seen: list[int] = []
+    real = driver_module.arm_order
+    monkeypatch.setattr(
+        driver_module, "arm_order", lambda s: seen.append(s) or real(s)
+    )
+    run_task(
+        task=SOFTMAX,
+        kernel=correct_softmax,
+        reference_fn=softmax_reference,
+        run_dir=tmp_path / "run",
+        repo_root=repo_root,
+        n_groups=ALL_SHAPES,
+        seed=SEED,
+        kernel_id="k",
+        arm_order_seed=7,
+    )
+    assert seen == [7], f"arm_order received {seen}, not the arm_order_seed"
+
+
+def test_arm_order_defaults_to_the_corpus_seed(tmp_path: Path, repo_root: Path, monkeypatch):
+    # Omitting it must keep a single run reproducible from its seed alone.
+    import autokernel_pbt.props.driver as driver_module
+
+    seen: list[int] = []
+    real = driver_module.arm_order
+    monkeypatch.setattr(
+        driver_module, "arm_order", lambda s: seen.append(s) or real(s)
+    )
+    drive(tmp_path / "run", correct_softmax, "k", False, repo_root, seed=SEED)
+    assert seen == [SEED]
+
+
+def test_arm_order_varies_with_the_repetition_index():
+    # What the metrics phase will pass: a repetition counter, leaving the corpus fixed.
+    assert len({tuple(arm_order(rep)) for rep in range(20)}) > 1
+
+
+def test_scores_are_persisted_in_canonical_arm_order(tmp_path: Path, repo_root: Path):
+    """ARM_NAMES is the on-disk order, whatever order the arms were evaluated in.
+
+    Without the sort, two runs of one task under different seeds produce score files
+    whose arm rows are permuted for reasons unrelated to the data, so any diff,
+    fingerprint or eyeball comparison of the two sees noise.
+    """
+    for seed in (1, 2, 3, 7):
+        run_dir = drive(
+            tmp_path / f"run{seed}", correct_softmax, "k", False, repo_root, seed=seed
+        )
+        persisted = [arm.arm for arm in ScoreTable(run_dir).read()]
+        assert persisted == list(ARM_NAMES), f"seed {seed} persisted {persisted}"

@@ -55,6 +55,7 @@ from safetensors.numpy import load_file, save_file
 
 from autokernel_pbt.props.backends.base import ExecutionResult, Status
 from autokernel_pbt.props.case import Case
+from autokernel_pbt.props.spec import CaseSpec
 
 METADATA_FILE = "rows.parquet"
 TENSOR_DIR = "tensors"
@@ -94,6 +95,8 @@ SCHEMA = pa.schema(
         # thing that lets a reader tell that a `scores.parquet` belongs to the
         # `rows.parquet` beside it.
         ("corpus_fingerprint", pa.string()),
+        # JSON, or "" for a group with no recipe (a hand-built test group).
+        ("case_spec", pa.string()),
     ]
 )
 
@@ -291,6 +294,7 @@ class ExecutionTable:
         # Parquet dictionary-encodes a single-valued string column, so a one-row-per-run
         # side table would cost a join to save nothing.
         record["corpus_fingerprint"] = fingerprint
+        record["case_spec"] = result.case_spec.to_json() if result.case_spec else ""
         return _conform(record, SCHEMA)
 
     def read(self) -> list[ExecutionResult]:
@@ -343,6 +347,11 @@ class ExecutionTable:
                     status=self._status(record["status"], record["case_id"]),
                     error=record["error"],
                     kernel_id=record["kernel_id"],
+                    case_spec=(
+                        CaseSpec.from_json(record["case_spec"])
+                        if record["case_spec"]
+                        else None
+                    ),
                     kernel_is_broken=record["kernel_is_broken"],
                 )
             )
