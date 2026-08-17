@@ -76,6 +76,8 @@ Do not rediscover these.
 | The execution table is never observed torn | Index and payloads swap atomically. A crash may lose the table; it must never mix runs. |
 | `Status`/`Verdict` are `str`-mixin enums with `__str__ = str.__str__` | `format()` returns the value on py3.10/3.11 and the *name* on 3.12+, against a declared `>=3.10`. |
 | `Case.dtype`/`Case.shape` describe the primary tensor `x` only | Helper tensors (`__perm__`) carry their own. Read each tensor's own attributes. |
+| Per-task property bundles name their members **explicitly** | They were once built from the whole registry, which was correct only while every property held for softmax. `rows_have_zero_mean` holds for no softmax output at all. |
+| A property's tolerance must model the **dominant** error mechanism | `rows_have_unit_variance` bounded float rounding and failed a correct reference: the real term is the reference's `eps`, `var/(var+eps)-1`, which grows as variance *shrinks* and is independent of `n`. |
 
 ---
 
@@ -104,20 +106,28 @@ spec compliance had already passed.
 ## Open obligations
 
 Obligations 1, 2 and 4 were discharged by phase 1.5 (`props/driver.py`, the kernel-identity
-and score tables, and the contract-built declarative arm). What remains:
+and score tables, and the contract-built declarative arm). Feature 0006 discharged the
+acceptance criteria for the declarative and hybrid arms, and wired `HybridOracle` and the
+`allclose` arm into the driver. What remains:
 
-1. **The declarative arm, hybrid arm, and contract loader have no acceptance criteria.** The
-   existing criteria cover infrastructure only.
-2. **`elapsed_s` is recorded but not yet fair.** It is order-biased — the arm that runs second
-   inherits warm caches — and a single run's value must not be quoted as a cost-per-bug
-   denominator. The metrics phase needs repeated timing with randomized arm order.
-3. **Partial abstention is undetectable.** The driver refuses an arm that is INCONCLUSIVE on
+1. **`elapsed_s` is recorded but not yet fair.** Arm order is randomized per run as of 0006
+   (`driver.arm_order`), so the bias is no longer *systematic* — but a single run's value must
+   still not be quoted as a cost-per-bug denominator. At ~0.5 ms per arm the measurement sits
+   near the clock's noise floor; the metrics phase needs repeated timing with a reported spread.
+2. **Partial abstention is undetectable.** The driver refuses an arm that is INCONCLUSIVE on
    *every* group, but an arm that abstains on some cannot be told from one that honestly could
    not judge them — abstention is a legitimate answer, so only the degenerate case is decidable.
-4. `HybridOracle` is not wired into `run_task`, which drives one task with two arms by design.
-   Adding it means deciding how its deliberately conditional reference coverage interacts with
-   the driver's whole-table coverage check.
-5. Degenerate ladder shapes `(1,1)` and `(17,1)` make softmax identically 1.0, so ~22% of groups
-   score any kernel clean. It deflates both arms equally, so arm-vs-arm stays unbiased, but the
-   absolute detection rate is understated by that constant and the paper must say so. Measured
-   end to end through the driver: 7/9 = 0.778 for both arms against `unnormalized_softmax`.
+   `RowsHaveUnitVariance` is now a deliberate instance of legitimate abstention.
+3. **The ladder deflates absolute detection, in two places.** Degenerate shapes `(1,1)` and
+   `(17,1)` make softmax identically 1.0, and layernorm's variance property abstains on the same
+   rungs because a constant row normalizes to zero, not to unit variance. It deflates every arm
+   equally, so arm-vs-arm stays unbiased, but any absolute rate is understated by that constant
+   and the paper must say so. Measured end to end through the driver: **7/9 = 0.778** for every
+   arm, on softmax against `unnormalized_softmax` and on layernorm against a
+   centers-but-never-divides kernel.
+4. **Authoring cost for layernorm is `n = 1`**
+   (`docs/measurements/2026-08-16-layernorm-authoring-cost.md`), with its threats pre-registered.
+   Extend it before the number is reported.
+5. `harness/correctness.py` still carries the five-stage skeleton the parent design §11 says the
+   property layer replaces. It is load-bearing for features 0001 and 0002 and their acceptance
+   criteria, so retiring it means retiring a feature — a scope decision, not cleanup.
