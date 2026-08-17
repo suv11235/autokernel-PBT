@@ -27,6 +27,7 @@ from autokernel_pbt.props.backends.base import OUTPUT_NAME, ExecutionResult, Sta
 from autokernel_pbt.props.case import BASE_RELATION, Case
 from autokernel_pbt.props.oracle import (
     REFERENCE_PROPERTY,
+    AllcloseOracle,
     DeclarativeOracle,
     HybridOracle,
     Oracle,
@@ -757,3 +758,123 @@ def test_every_arm_rejects_an_empty_group():
 def test_the_empty_group_error_names_the_arm():
     with pytest.raises(ValueError, match="reference"):
         _reference().evaluate([])
+
+
+# --------------------------------------------------------------------------
+# The allclose arm (feature 0006)
+# --------------------------------------------------------------------------
+
+
+def _allclose(reference_fn=None) -> AllcloseOracle:
+    return AllcloseOracle(reference_fn or _softmax)
+
+
+def test_allclose_arm_uses_numpy_defaults():
+    """The criterion ALLCLOSE_ARM_IS_UNMODIFIED.
+
+    This arm exists so a reader can judge the reference arm's log2(n)-normalized
+    ratio against what the field actually does. A tuned allclose would measure
+    nothing, so the two constants are pinned rather than left to drift.
+    """
+    oracle = _allclose()
+    assert oracle.rtol == 1e-5
+    assert oracle.atol == 1e-8
+
+
+def test_allclose_arm_passes_a_matching_output():
+    assert _allclose().evaluate([_row(X, _softmax(X))])[0].verdict is Verdict.PASS
+
+
+def test_allclose_arm_fails_a_diverging_output():
+    """The criterion ALLCLOSE_ARM_DETECTS."""
+    assert _allclose().evaluate([_row(X, _softmax(X) * 1.1)])[0].verdict is Verdict.FAIL
+
+
+def test_allclose_arm_is_inconclusive_on_a_failed_execution():
+    """A kernel that did not complete is not evidence about correctness.
+
+    The output is deliberately *present and correct*. Status and output presence are
+    independent conditions — a Phase 3 timeout can leave a fully written buffer
+    behind — and a row with no outputs is caught by the missing-output guard instead,
+    so it would certify this one without ever reaching it. An earlier version of this
+    test passed ``y=None`` and did exactly that: deleting the status check left every
+    allclose test green.
+    """
+    row = _row(X, _softmax(X), status=Status.LAUNCH_ERROR)
+    result = _allclose().evaluate([row])[0]
+    assert result.verdict is Verdict.INCONCLUSIVE
+    assert "status" in result.detail
+
+
+def test_allclose_arm_is_inconclusive_when_the_output_is_missing():
+    # Status and output presence are independent: a Phase 3 timeout can leave a
+    # partially written buffer behind with status OK.
+    assert _allclose().evaluate([_row(X, None)])[0].verdict is Verdict.INCONCLUSIVE
+
+
+def test_allclose_arm_is_inconclusive_on_an_empty_output():
+    # allclose over zero elements is vacuously True. Taken at face value that is a
+    # PASS backed by no evidence, which inflates every correct-kernel denominator.
+    empty = np.zeros((0,), dtype=np.float32)
+    result = _allclose(lambda **kw: empty).evaluate([_row(X, empty)])[0]
+    assert result.verdict is Verdict.INCONCLUSIVE
+
+
+def test_allclose_arm_is_inconclusive_when_the_reference_is_non_finite():
+    # Symmetric with the reference arm: allclose against NaN is False, so an
+    # unchecked reference defect books a correct kernel as a caught bug.
+    def broken(**kwargs):
+        return np.full_like(X, np.nan)
+
+    result = _allclose(broken).evaluate([_row(X, _softmax(X))])[0]
+    assert result.verdict is Verdict.INCONCLUSIVE
+    assert "reference" in result.detail
+
+
+def test_allclose_arm_fails_a_shape_disagreement_that_broadcasts_to_equal():
+    """The shape check is load-bearing, not defensive.
+
+    ``np.allclose`` broadcasts. A (2,1) reference against a (2,3) output whose values
+    all agree compares elementwise-equal and returns **True**, so without the
+    explicit shape check this arm would PASS a kernel that produced the wrong shape
+    — a common and serious real kernel bug, scored as correct.
+
+    The values are chosen so broadcasting succeeds *and* agrees. An earlier version
+    of this test used a reference that disagreed numerically, which FAILed with or
+    without the shape check and therefore certified nothing: deleting the check left
+    every allclose test green.
+    """
+    got = np.full((2, 3), 0.5, dtype=np.float32)
+
+    def one_column(**kwargs):
+        return np.full((2, 1), 0.5, dtype=np.float32)
+
+    result = _allclose(one_column).evaluate([_row(X, got)])[0]
+    assert result.verdict is Verdict.FAIL
+    assert "shape mismatch" in result.detail
+
+
+def test_allclose_arm_is_not_tolerance_free():
+    # A tolerance is this arm's entire mechanism; it is the definition of
+    # tolerance-dependent detection that the headline claim contrasts against.
+    assert _allclose().evaluate([_row(X, _softmax(X))])[0].tolerance_free is False
+
+
+def test_allclose_arm_attributes_every_result_to_its_case():
+    # Every PropertyResult carries exactly one of case_id/group_id. This arm is
+    # per-row, so it always attributes to the case, on all three verdict paths.
+    rows = [
+        _row(X, _softmax(X)),
+        _row(X, _softmax(X) * 1.1),
+        _row(X, None, status=Status.LAUNCH_ERROR),
+    ]
+    for result in _allclose().evaluate(rows):
+        assert result.case_id
+        assert result.group_id == ""
+
+
+def test_allclose_arm_rejects_an_empty_group():
+    # Uniform with the other arms: an empty group would summarize to INCONCLUSIVE
+    # and quietly add a group that judged nothing to the detection denominator.
+    with pytest.raises(ValueError, match="allclose"):
+        _allclose().evaluate([])
