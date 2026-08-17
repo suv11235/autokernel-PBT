@@ -4,6 +4,9 @@
 **Instance:** Lambda Cloud, NVIDIA A10, compute capability 8.6, 72 SMs, 23.7 GB
 **Toolchain:** driver/CUDA 12.8, torch 2.7.0, triton 3.3.0 (Lambda Stack)
 **Recorded:** 52 rows across four tasks, seed 42, every execution `ok`
+**Superseded in part:** §3 and §4 below describe the *first* pass, which barely touched the
+hardware. See `2026-08-17-at-scale-hardware-run.md` for what changed and why the tolerance and
+telemetry claims here are narrower than they read.
 **Scored:** offline on CPU, no device involved — the property the record/replay architecture exists to buy
 
 ---
@@ -64,6 +67,12 @@ Triton softmax against the float64 reference:
 | 16384 | 14.0 | 0.0552 | 0.7731 | 0.00604 |
 | **drift** | | **5.9×** | **2.1×** | **57.5×** |
 
+**Scope correction (2026-08-17).** This was measured with a single fixed `BLOCK = 16384`, so
+*every shape fit in one Triton block* and only the **single-block** reduction tree was exercised.
+A production-scale kernel performs a two-stage reduction across blocks, and that tree is **not**
+tested here. The paragraph below originally claimed validation against "Triton's actual reduction
+tree"; that was too strong and is corrected.
+
 **`log2(n)` is safe.** The largest correct-kernel ratio is 0.327 against a threshold of 30 — about
 92× of headroom. No correct Triton kernel comes close to being flagged, which is what the
 normalization has to guarantee first.
@@ -86,9 +95,9 @@ neighbour (0.0913 vs 0.0757) rather than wildly off, so Triton's masked tail han
 introducing a systematic error. That pair was put in the sweep to make tail handling visible, and
 it is visible and benign.
 
-## 4. Telemetry: every declared field populated
+## 4. Telemetry: every declared field populated — but with almost no variance
 
-The one irreversible decision, validated. Zero fields came back empty:
+The one irreversible decision, validated **as plumbing**. Zero fields came back empty:
 
 ```
 telemetry_schema_version 1          n_regs 168        n_spills 0
@@ -105,6 +114,13 @@ The probe locations chosen blind were all correct for Triton 3.3.0: `n_regs` and
 the `CompiledKernel`, `shared` falling through to `metadata.shared`. Both `n_spills` and
 `shared_bytes` legitimately read 0 — the falsy-not-absent case the schema was explicitly
 designed to distinguish, and it distinguished it.
+
+**But the signal was degenerate, and reporting this as "validated" overstated it.** Across all 52
+rows, `n_spills`, `shared_bytes`, `num_warps` and `num_stages` each had exactly **one** distinct
+value, and `n_regs` had two. That is structural: those fields are properties of the *compiled
+kernel*, and Triton compiles one artifact per constexpr combination — so a single fixed
+`BLOCK = 16384` guarantees they are constant. The schema was shown to be wired correctly; it was
+not shown to carry information. See `2026-08-17-at-scale-hardware-run.md`.
 
 ## 5. Three defects the run found that no local test could
 

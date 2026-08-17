@@ -1,8 +1,15 @@
 """Triton ports of the development ladder.
 
-One fixed launch configuration per task, deliberately. Sweeping BLOCK_SIZE would
-multiply hardware time and confound the tier-1 transfer question -- does a property
-that holds on NumPy hold on Triton -- with a block-size study. That study is Phase 3b.
+The tile width is DERIVED from each shape rather than fixed. The first hardware run
+used a single BLOCK=16384 for everything, which had two consequences worth recording:
+every shape compiled to the same artifact, so all compiled telemetry was constant
+across the run and carried no signal; and the kernels were silently wrong for any row
+wider than the block, which the corpus never reached. Deriving it fixes both and is
+what a competent Triton kernel does anyway.
+
+This is not a block-size *sweep* -- there is still exactly one configuration per
+shape, so the tier-1 transfer question stays unconfounded. Sweeping BLOCK independently
+of shape remains Phase 3b's.
 
 Each kernel matches its task's existing `kernels/tasks/<id>/acceptance.yaml`. The
 softmax and layernorm kernels subtract the row max and the row mean respectively, for
@@ -26,11 +33,27 @@ from autokernel_pbt.props.backends.triton_kernel import (
     device_digest,
 )
 
-#: One row per program, with the whole row in registers. Covers the ladder (max
-#: reduction length 129) and the tolerance sweep (max 16384) with one configuration,
-#: which is what keeps the first run a clean transfer measurement rather than a
-#: block-size study.
-BLOCK_SIZE = 16384
+#: Largest tile these kernels support. One program holds a whole row in registers, so
+#: a row wider than this needs a two-stage (multi-block) reduction, which is a
+#: different kernel and out of scope here -- the guard in `_launcher` refuses it
+#: rather than computing a wrong answer.
+MAX_BLOCK = 16384
+
+
+def block_for(n_cols: int) -> int:
+    """The tile width for a row of `n_cols`, rounded up to a power of two.
+
+    DERIVED, not fixed. A fixed BLOCK is wrong in both directions: too small and the
+    kernel silently drops the tail of every row (measured: BLOCK=2048 on n_cols=4096
+    makes softmax rows sum to 1.51 instead of 1.0, with no error raised), too large
+    and every shape compiles to the same artifact -- which made `n_regs`, `n_spills`,
+    `shared_bytes`, `num_warps` and `num_stages` *constant across the entire first
+    hardware run*, since those are properties of the compiled kernel and Triton
+    compiles one artifact per constexpr combination.
+
+    Deriving it is also simply what a competent Triton kernel does.
+    """
+    return max(1 << (n_cols - 1).bit_length(), 1)
 
 
 @triton.jit
@@ -85,6 +108,18 @@ def _launcher(jit_kernel):
     def launch(*, grid, constexprs, record_compiled, **inputs):
         x = inputs["x"]
         cols = x.shape[-1]
+        block = constexprs["BLOCK"]
+        if cols > block:
+            # A bad *call*, not bad data: it can only come from a misconfigured
+            # kernel, costs nothing to re-run, and the alternative is silent
+            # wrongness -- `tl.arange(0, BLOCK)` simply never reaches the tail, so
+            # the kernel returns a plausible, incorrect answer.
+            msg = (
+                f"BLOCK={block} is smaller than n_cols={cols}; this kernel holds a "
+                f"whole row in one tile, and a smaller tile would silently drop the "
+                f"row's tail. Rows wider than {MAX_BLOCK} need a two-stage reduction."
+            )
+            raise ValueError(msg)
         xd = torch.as_tensor(x, device="cuda")
         yd = torch.empty_like(xd)
 
@@ -106,27 +141,27 @@ def _launcher(jit_kernel):
     return launch
 
 
-def relu_kernel() -> TritonKernel:
+def relu_kernel(n_cols: int) -> TritonKernel:
     return TritonKernel(
         kernel_id="relu_triton",
         jit_fn=_relu_kernel,
         grid=_rows_grid,
-        constexprs={"BLOCK": BLOCK_SIZE},
+        constexprs={"BLOCK": block_for(n_cols)},
         launcher=_launcher(_relu_kernel),
     )
 
 
-def softmax_kernel() -> TritonKernel:
+def softmax_kernel(n_cols: int) -> TritonKernel:
     return TritonKernel(
         kernel_id="softmax_triton",
         jit_fn=_softmax_kernel,
         grid=_rows_grid,
-        constexprs={"BLOCK": BLOCK_SIZE},
+        constexprs={"BLOCK": block_for(n_cols)},
         launcher=_launcher(_softmax_kernel),
     )
 
 
-def layernorm_kernel() -> TritonKernel:
+def layernorm_kernel(n_cols: int) -> TritonKernel:
     # EPS matches tasks.LAYERNORM_EPS. A kernel targeting a different eps sits
     # systematically away from the reference and would inflate every
     # tolerance-bearing arm's rate for a reason that is not a defect.
@@ -136,7 +171,7 @@ def layernorm_kernel() -> TritonKernel:
         kernel_id="layernorm_triton",
         jit_fn=_layernorm_kernel,
         grid=_rows_grid,
-        constexprs={"BLOCK": BLOCK_SIZE, "EPS": LAYERNORM_EPS},
+        constexprs={"BLOCK": block_for(n_cols), "EPS": LAYERNORM_EPS},
         launcher=_launcher(_layernorm_kernel),
     )
 
@@ -147,4 +182,5 @@ KERNELS = {
     "softmax": softmax_kernel,
     "layernorm": layernorm_kernel,
     "tolerance_sweep": softmax_kernel,
+    "softmax_at_scale": softmax_kernel,
 }

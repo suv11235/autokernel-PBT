@@ -270,10 +270,43 @@ TOLERANCE_SWEEP = Task(
 )
 
 
+#: Shapes that actually load a GPU. The ladder totals ~28 KB and the tolerance sweep
+#: ~400 KB, so the first hardware run pushed 430 KB through an A10 and used at most 17
+#: of its 72 SMs -- the device was idle, and every compiled-telemetry field came back
+#: constant because one fixed tile served every shape.
+#:
+#: These are chosen for grid depth (rows >> SM count) and for a spread of row widths,
+#: so the derived tile varies from 256 to 8192 and the compiled artifact -- registers,
+#: spills, shared memory, warps -- varies with it. That is the regime the device-only
+#: fault classes live in, and the regime the telemetry schema was built for.
+_SCALE_SHAPES: tuple[tuple[int, ...], ...] = (
+    (4096, 1024),
+    (8192, 512),
+    (2048, 4096),
+    (16384, 256),
+    (1024, 8192),
+)
+
+#: Softmax again, at a size where the hardware is actually working. Not a new op and
+#: not a new reference: the point is to exercise occupancy, register pressure and a
+#: varying tile width, all of which are invisible at ladder scale, while keeping the
+#: numbers comparable with every softmax measurement already recorded.
+SOFTMAX_AT_SCALE = Task(
+    task_id="softmax_at_scale",
+    domain=InputDomain(
+        task_id="softmax_at_scale",
+        tensors=(TensorSpec(name="x", dtype="float32", distribution="normal"),),
+        shapes=_SCALE_SHAPES,
+        relations=(),
+    ),
+)
+
+
 #: Name -> task. Keyed off each task's own ``task_id`` so a key and the ids
 #: stamped into its recorded rows cannot disagree.
 TASKS: dict[str, Task] = {
-    task.task_id: task for task in (RELU, SOFTMAX, LAYERNORM, TOLERANCE_SWEEP)
+    task.task_id: task
+    for task in (RELU, SOFTMAX, LAYERNORM, TOLERANCE_SWEEP, SOFTMAX_AT_SCALE)
 }
 
 #: Reference implementation per task, for the reference arm. Kept separate from
@@ -285,4 +318,5 @@ REFERENCES = {
     SOFTMAX.task_id: softmax_reference,
     LAYERNORM.task_id: layernorm_reference,
     TOLERANCE_SWEEP.task_id: softmax_reference,
+    SOFTMAX_AT_SCALE.task_id: softmax_reference,
 }

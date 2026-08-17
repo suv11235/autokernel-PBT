@@ -80,6 +80,8 @@ Do not rediscover these.
 | Telemetry declares every key; unavailable ones carry `MISSING` | An omitted field makes "not captured" and "captured as zero" indistinguishable, and they mean opposite things about register pressure. |
 | Triton introspection is **probed**, not asserted | Register and spill counts have moved between the compiled kernel and its metadata across releases. A version bump must degrade one field, not abort a paid run. |
 | The input-mutation check lives in the **launcher**, not the backend | `readonly_inputs` protects the host array, and the backend holds only host arrays — a check there is structurally incapable of firing. Only the launcher holds the device buffers. |
+| The Triton tile width is **derived from the shape**, never fixed | Too large and every shape shares one compiled artifact, so all compiled telemetry is constant and carries no signal. Too small and `tl.arange(0, BLOCK)` drops the row's tail *silently* — measured, softmax rows summing to 1.51 instead of 1.0. |
+| `compute-sanitizer` needs `PYTORCH_NO_CUDA_MEMORY_CACHING=1` | PyTorch sub-allocates from large cached segments, so an intra-segment overrun is not an OOB at the CUDA level. Measured: a 1 MB overrun past a 1 KB buffer reports **0 errors** with caching on, and is caught with it off. |
 | `pythonpath` in pyproject is a **pytest** setting | It makes `kernels/` importable for tests and does nothing for a standalone script. The device tests passed while `gpu_record.py` died on import. |
 | A property's tolerance must model the **dominant** error mechanism | `rows_have_unit_variance` bounded float rounding and failed a correct reference: the real term is the reference's `eps`, `var/(var+eps)-1`, which grows as variance *shrinks* and is independent of `n`. |
 
