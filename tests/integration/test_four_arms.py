@@ -15,7 +15,7 @@ import pytest
 
 from autokernel_pbt.props.driver import ARM_NAMES, read_run, run_task
 from autokernel_pbt.props.scores import ScoreTable
-from autokernel_pbt.props.tasks import SOFTMAX, softmax_reference
+from autokernel_pbt.props.tasks import REFERENCES, SOFTMAX, TASKS, softmax_reference
 from autokernel_pbt.props.verdict import Verdict, summarize
 
 pytestmark = pytest.mark.integration
@@ -98,13 +98,18 @@ def test_every_arm_catches_an_unnormalized_softmax(tmp_path: Path, repo_root: Pa
         assert Verdict.FAIL in verdicts, f"{arm.arm} did not catch an unnormalized softmax"
 
 
-def test_allclose_and_reference_agree_on_a_correct_kernel(tmp_path: Path, repo_root: Path):
-    """The comparison the fourth arm exists to enable.
+def test_allclose_and_reference_agree_on_a_correct_softmax(tmp_path: Path, repo_root: Path):
+    """The two tolerance-bearing arms agree on softmax -- and ONLY on softmax.
 
-    On a correct kernel the strengthened log2(n)-normalized ratio and the field's
-    plain ``allclose`` must both pass. A disagreement here would mean the reference
-    arm's calibration is off in one direction or the other, which is exactly the
-    objection carrying this arm is meant to answer with evidence.
+    Scoped to softmax deliberately. An earlier version of this test was named for
+    "a correct kernel" and read as a general claim, which is false: on layernorm the
+    same two arms disagree on 5 of 9 groups, because a fixed `atol` cannot cope with
+    an output centered on zero. See
+    ``test_allclose_false_positives_on_a_correct_layernorm_kernel``.
+
+    Softmax's absolute error scales with each element's own magnitude, so agreement
+    here says the reference arm's calibration is not *looser* than the field default
+    on that task. It says nothing about any other task.
     """
     run_dir = drive(tmp_path / "run", correct_softmax, "correct_softmax", repo_root)
     by_arm = {arm.arm: arm for arm in ScoreTable(run_dir).read()}
@@ -155,3 +160,91 @@ def test_a_wholly_crashing_kernel_is_refused_rather_than_scored(
 
     with pytest.raises(ValueError, match="established nothing anywhere"):
         drive(tmp_path / "run", always_crashes, "always_crashes", repo_root)
+
+
+# --------------------------------------------------------------------------- #
+# The allclose arm's layernorm false positives
+# --------------------------------------------------------------------------- #
+
+
+def correct_layernorm(x: np.ndarray) -> np.ndarray:
+    """Correct, accumulating in the input's own float32 rather than widening."""
+    mean = x.mean(axis=-1, keepdims=True)
+    centered = x - mean
+    variance = (centered * centered).mean(axis=-1, keepdims=True)
+    return (centered / np.sqrt(variance + np.float32(1e-5))).astype(x.dtype)
+
+
+def drive_layernorm(run_dir: Path, kernel, kernel_id: str, repo_root: Path) -> Path:
+    run_task(
+        task=TASKS["layernorm"],
+        kernel=kernel,
+        reference_fn=REFERENCES["layernorm"],
+        run_dir=run_dir,
+        repo_root=repo_root,
+        n_groups=len(TASKS["layernorm"].domain.shapes),
+        seed=SEED,
+        kernel_id=kernel_id,
+    )
+    return run_dir
+
+
+def test_allclose_false_positives_on_a_correct_layernorm_kernel(
+    tmp_path: Path, repo_root: Path
+):
+    """A measured property of the field's default oracle, pinned so it stays visible.
+
+    This is NOT a defect to be tuned away. `AllcloseOracle` is carried precisely
+    because it is the untuned default the kernel literature uses, and changing its
+    tolerances would delete the comparison it exists to provide.
+
+    The mechanism: `atol=1e-8` is ~12x below float32 eps (1.19e-7), and a layernorm
+    output is centered on zero by construction, so near-zero elements are guaranteed
+    in every row. At an element whose true value is 3.6e-4 the budget is
+    `rtol*3.6e-4 + atol = 1.4e-8`, an order of magnitude below the 4.2e-8 deviation a
+    correct float32 kernel produces. Softmax is immune because its absolute error
+    scales with each element's own magnitude, which is why the softmax-only agreement
+    test does not catch this.
+
+    Measured on seed 42: allclose FAILs 5 of 9 groups (6 of 18 cases) while the
+    reference, declarative and hybrid arms pass all 9. That is a false-positive rate
+    of 0.556 for the field's default on a correct kernel, and it is one of the
+    sharper results this arm was added to produce.
+    """
+    run_dir = drive_layernorm(tmp_path / "run", correct_layernorm, "correct_ln", repo_root)
+    _, arms = read_run(run_dir)
+
+    by_arm = {}
+    for arm in arms:
+        groups: dict[str, list] = {}
+        for result in arm.results:
+            groups.setdefault(result.group_id, []).append(result)
+        by_arm[arm.arm] = sum(
+            summarize(results) is Verdict.FAIL for results in groups.values()
+        )
+
+    assert by_arm["allclose"] > 0, (
+        "allclose no longer false-positives on layernorm; if its tolerances were "
+        "tuned, the arm has stopped being the untuned default it exists to represent"
+    )
+    for name in ("reference", "declarative", "hybrid"):
+        assert by_arm[name] == 0, f"{name} false-positived on a correct layernorm kernel"
+
+
+def test_the_strengthened_reference_arm_beats_the_field_default_here(
+    tmp_path: Path, repo_root: Path
+):
+    """The comparison the fourth arm was added to make, on the rung where it bites.
+
+    The reference arm's log2(n)-normalized test ratio is scale-invariant, so it is
+    unmoved by the near-zero elements that break a fixed `atol`. Softmax cannot show
+    this -- both arms agree there -- so without layernorm the strengthened baseline
+    would look like an unfalsifiable claim.
+    """
+    run_dir = drive_layernorm(tmp_path / "run", correct_layernorm, "correct_ln", repo_root)
+    _, arms = read_run(run_dir)
+    verdicts = {
+        arm.arm: {r.verdict for r in arm.results} for arm in arms
+    }
+    assert Verdict.FAIL in verdicts["allclose"]
+    assert Verdict.FAIL not in verdicts["reference"]
