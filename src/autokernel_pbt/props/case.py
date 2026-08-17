@@ -7,6 +7,8 @@ from typing import Any
 
 import numpy as np
 
+from autokernel_pbt.props.spec import CaseSpec
+
 BASE_RELATION = "base"
 
 
@@ -56,6 +58,12 @@ class CaseGroup:
 
     group_id: str
     cases: tuple[Case, ...]
+    #: The recipe that produced this group, when one exists. Optional because a
+    #: hand-built group in a test need not invent a recipe it will never use; every
+    #: group the Generator produces carries one. A group without a spec simply cannot
+    #: be regenerated or shrunk, which is exactly right for a group assembled by hand
+    #: from literal tensors — there is nothing to regenerate it *from*.
+    spec: CaseSpec | None = None
 
     def __post_init__(self) -> None:
         # Normalize cases to tuple unconditionally
