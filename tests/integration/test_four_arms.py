@@ -248,3 +248,27 @@ def test_the_strengthened_reference_arm_beats_the_field_default_here(
     }
     assert Verdict.FAIL in verdicts["allclose"]
     assert Verdict.FAIL not in verdicts["reference"]
+
+
+def test_a_recorded_run_can_be_regenerated_from_disk(tmp_path: Path, repo_root: Path):
+    """The offline-shrinker path, end to end, with no generator handed in.
+
+    Reads a recorded run back, takes the spec off a row, and rebuilds that group from
+    the task's domain alone -- which is what a shrinker months later would do. The
+    rebuilt tensors must be bitwise identical to the recorded ones, or a minimized
+    reproducer would describe a case the run never executed.
+    """
+    from autokernel_pbt.props.generator import Generator
+    from autokernel_pbt.props.table import ExecutionTable
+
+    run_dir = drive(tmp_path / "run", correct_softmax, "correct_softmax", repo_root)
+    rows = ExecutionTable(run_dir).read()
+
+    recorded = next(r for r in rows if r.case.relation == "base")
+    assert recorded.case_spec is not None, "the recorded run carries no recipe"
+
+    rebuilt = Generator(SOFTMAX.domain, seed=recorded.case_spec.seed).group_from_spec(
+        recorded.case_spec
+    )
+    assert rebuilt.group_id == recorded.case.group_id
+    assert np.array_equal(rebuilt.base.tensors["x"], recorded.case.tensors["x"])

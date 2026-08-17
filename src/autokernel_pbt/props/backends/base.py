@@ -16,6 +16,7 @@ from typing import Any, Protocol
 import numpy as np
 
 from autokernel_pbt.props.case import Case
+from autokernel_pbt.props.spec import CaseSpec
 
 # Tensors whose names start with this prefix are generator bookkeeping (e.g. a
 # recorded permutation) and are never passed to the kernel.
@@ -85,6 +86,13 @@ class ExecutionResult:
     # false-positive rate.
     kernel_id: str = ""
     kernel_is_broken: bool | None = None
+    # The recipe that regenerated this row's case group, denormalized onto every row
+    # of the group exactly as `corpus_fingerprint` is, and for the same reason:
+    # Parquet dictionary-encodes a repeated string column, so a side table would cost
+    # a join to save nothing. Without it a recorded run carries no way to rebuild a
+    # group offline, and a later shrinker would have to guess (seed, index, shape,
+    # transforms) back out of the domain -- the retrofit `spec.py` exists to prevent.
+    case_spec: CaseSpec | None = None
 
 
 class Backend(Protocol):

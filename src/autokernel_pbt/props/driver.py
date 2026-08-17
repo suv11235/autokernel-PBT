@@ -380,6 +380,9 @@ def run_task(
             # could in principle let it influence what it records.
             result.kernel_id = kernel_id
             result.kernel_is_broken = kernel_is_broken
+            # Denormalized from the group onto each of its rows, so a recorded run is
+            # regenerable offline without the generator that made it.
+            result.case_spec = group.spec
             results.append(result)
     ExecutionTable(run_dir).write(results)
 
