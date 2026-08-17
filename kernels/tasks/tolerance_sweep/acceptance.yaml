@@ -1,0 +1,30 @@
+# Acceptance contract for the tolerance-sweep task.
+#
+# The same properties as softmax, because it IS softmax -- the task exists to sweep the
+# reduction length far wider than the ladder does, so that the reference arm's log2(n)
+# normalization can be checked against a real device reduction tree.
+#
+# No SHIFT_INVARIANCE criterion: the domain declares no relations, so there is no
+# partner case for a group property to read, and a contract naming one would build an
+# oracle that abstains on every group.
+task_id: tolerance_sweep
+version: 1
+
+criteria:
+  - id: FINITE_OUTPUT
+    description: no output element is NaN or Inf, on any input the domain generates
+    check:
+      type: property
+      property: outputs_are_finite
+
+  - id: UNIT_INTERVAL
+    description: every output element is a probability, lying in [0, 1] exactly
+    check:
+      type: property
+      property: values_in_unit_interval
+
+  - id: ROW_SUMS
+    description: each row of the output sums to one within its dtype's rounding budget
+    check:
+      type: property
+      property: rows_sum_to_one

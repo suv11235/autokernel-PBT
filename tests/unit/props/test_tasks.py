@@ -218,3 +218,43 @@ def test_layernorm_contract_builds_an_oracle(repo_root):
     # No unit-interval criterion: a layernorm output is unbounded in both directions,
     # so asserting a range would fail every correct kernel.
     assert "values_in_unit_interval" not in names
+
+
+# --------------------------------------------------------------------------
+# The tolerance-sweep task (feature 0007)
+# --------------------------------------------------------------------------
+
+
+def test_tolerance_sweep_spans_a_wider_log2_range_than_the_ladder():
+    """The criterion TOLERANCE_SWEEP_SPANS_THE_RANGE.
+
+    The ladder's reduction lengths are {1, 7, 8, 16, 32, 33, 64, 129} -- log2 from 0
+    to 7. The CPU measurements that chose log2(n) as the reference arm's
+    normalization swept n to 16384, log2 = 14. Measuring the tolerance on the ladder
+    alone would cover half the dynamic range, at the noisy low end, so the device run
+    could not answer the normalization question at all.
+    """
+    sweep = {shape[-1] for shape in TASKS["tolerance_sweep"].domain.shapes}
+    ladder = {shape[-1] for shape in TASKS["softmax"].domain.shapes}
+    assert max(sweep) >= 16384
+    assert np.log2(max(sweep)) - np.log2(max(ladder)) >= 6
+
+
+def test_tolerance_sweep_reuses_the_softmax_reference():
+    # It measures the *tolerance*, not a new op. A second reference would make its
+    # numbers incomparable with the softmax numbers already recorded on CPU.
+    assert REFERENCES["tolerance_sweep"] is REFERENCES["softmax"]
+
+
+def test_tolerance_sweep_declares_no_relations():
+    # It exists to sweep n, not to exercise metamorphic properties; partner cases
+    # would double its hardware time for nothing.
+    assert TASKS["tolerance_sweep"].domain.relations == ()
+
+
+def test_tolerance_sweep_includes_non_power_of_two_lengths():
+    # A sweep of powers of two alone is blind to tail handling, which is where a
+    # masked partial tile goes wrong -- and partial tiles are the whole reason the
+    # ladder carries odd remainders.
+    lengths = {shape[-1] for shape in TASKS["tolerance_sweep"].domain.shapes}
+    assert any(n & (n - 1) for n in lengths), lengths

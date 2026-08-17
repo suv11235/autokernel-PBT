@@ -19,6 +19,7 @@ Every feature starts as a **spec** before code. Tests are written from **accepta
 | [0004](./features/0004-property-oracle-layer/spec.md) | Property/oracle layer (phase 1) | implemented |
 | [0005](./features/0005-measurable-runs/spec.md) | Measurable runs | implemented |
 | [0006](./features/0006-four-arms/spec.md) | Four arms and the normalization rung | implemented |
+| [0007](./features/0007-triton-backend/spec.md) | Triton backend and first hardware run | implemented |
 
 ## Schemas
 

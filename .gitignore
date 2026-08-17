@@ -15,6 +15,10 @@ htmlcov/
 
 # Runtime / experiments
 .runs/
+# Recorded hardware runs brought home from a rented instance. Data, sometimes large,
+# and regenerable from the seed -- but the OUTPUTS are not, so keep the tarballs too.
+runs/
+*.tar.gz
 results/
 *.tsv
 wandb/
