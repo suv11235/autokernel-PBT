@@ -13,7 +13,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
+
+# `kernels/` is a namespace package at the repo root, not under `src/`. pytest is
+# configured with `pythonpath = ["src", "."]`, but that is a PYTEST setting -- it does
+# nothing for a standalone script, which is how this runs on the instance. Without
+# this the device tests pass and the recording script dies with ModuleNotFoundError,
+# which is exactly what the first hardware run hit.
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
 from autokernel_pbt.props.backends.triton_backend import TritonBackend
 from autokernel_pbt.props.generator import Generator
