@@ -84,6 +84,16 @@ _DEVICE_KEYS = (
 _LAUNCH_KEYS = ("grid", "constexprs")
 _DERIVED_KEYS = ("ptx_hash",)
 
+#: Facts the backend observes about the execution rather than reads off an artifact.
+#: Defaults rather than MISSING: these are always knowable, so an absent value would
+#: mean the backend forgot to look, not that the toolchain declined to say.
+#:
+#: `input_mutated` separates a kernel that wrote to its own input from one that merely
+#: crashed. Both are LAUNCH_ERROR -- neither is evidence about numerics -- but they are
+#: different fault classes, and collapsing them would make the distinction
+#: unrecoverable from the artifacts.
+_FLAG_DEFAULTS: dict[str, Any] = {"input_mutated": False}
+
 
 def declared_keys() -> tuple[str, ...]:
     """Every key the schema promises to emit, present or MISSING."""
@@ -93,6 +103,7 @@ def declared_keys() -> tuple[str, ...]:
         *_DEVICE_KEYS,
         *_LAUNCH_KEYS,
         *_DERIVED_KEYS,
+        *_FLAG_DEFAULTS,
     )
 
 
@@ -121,7 +132,13 @@ def _hash(text: Any) -> Any:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:HASH_CHARS]
 
 
-def extract(compiled: Any, *, device: dict[str, Any], launch: dict[str, Any]) -> dict[str, Any]:
+def extract(
+    compiled: Any,
+    *,
+    device: dict[str, Any],
+    launch: dict[str, Any],
+    flags: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Assemble one execution's telemetry.
 
     `device` and `launch` are merged verbatim -- the backend knows those and does not
@@ -144,4 +161,6 @@ def extract(compiled: Any, *, device: dict[str, Any], launch: dict[str, Any]) ->
         out[key] = device.get(key, MISSING)
     for key in _LAUNCH_KEYS:
         out[key] = launch.get(key, MISSING)
+    for key, default in _FLAG_DEFAULTS.items():
+        out[key] = (flags or {}).get(key, default)
     return out
