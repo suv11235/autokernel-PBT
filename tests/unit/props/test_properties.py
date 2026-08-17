@@ -671,12 +671,35 @@ def test_the_two_layernorm_properties_are_complementary():
     assert RowsHaveUnitVariance().check(_row(WIDE, scaled_only)).verdict is Verdict.PASS
 
 
-def test_unit_variance_abstains_on_an_all_zero_output():
+def test_unit_variance_abstains_on_a_constant_input():
     # Layernorm of a constant row is identically zero, not unit variance, because eps
     # dominates the denominator. Correct behaviour, reached at the (1,1) and (17,1)
     # rungs -- judging it would fail every correct kernel on two of nine rungs.
+    constant = np.full((2, 4), 3.0, dtype=np.float32)
     y = np.zeros((2, 4), dtype=np.float32)
-    assert RowsHaveUnitVariance().check(_row(WIDE, y)).verdict is Verdict.INCONCLUSIVE
+    assert RowsHaveUnitVariance().check(_row(constant, y)).verdict is Verdict.INCONCLUSIVE
+
+
+def test_unit_variance_fails_an_all_zero_output_from_a_varying_input():
+    """The abstention is keyed off the INPUT, not the output, and the gap matters.
+
+    A kernel returning a zeroed or uninitialized buffer produces a flat output from a
+    varying input. Keyed off the output, this abstained -- and every other layernorm
+    property passes such a kernel (zero mean holds; shift invariance holds because
+    0 == 0), so the group summarized to INCONCLUSIVE, the driver refused the run as
+    an arm that established nothing, and NO scores were written at all -- discarding
+    the allclose, reference and hybrid verdicts that each caught it on every group.
+    """
+    y = np.zeros_like(WIDE)
+    assert RowsHaveUnitVariance().check(_row(WIDE, y)).verdict is Verdict.FAIL
+
+
+def test_unit_variance_abstains_only_on_the_constant_rows():
+    # A mixed case: one constant row, one varying. The varying row must still be
+    # judged, or a single degenerate row would blind the property to the whole case.
+    x = np.array([[5.0, 5.0, 5.0, 5.0], [-9.0, -3.0, 4.0, 8.0]], dtype=np.float32)
+    y = np.stack([np.zeros(4, dtype=np.float32), np.zeros(4, dtype=np.float32)])
+    assert RowsHaveUnitVariance().check(_row(x, y)).verdict is Verdict.FAIL
 
 
 def test_neither_layernorm_property_is_tolerance_free():

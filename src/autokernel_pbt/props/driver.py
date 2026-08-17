@@ -54,8 +54,9 @@ from autokernel_pbt.props.tasks import Task
 from autokernel_pbt.props.verdict import PropertyResult, Verdict, summarize
 
 #: The four arms, in canonical order: the field's default, the strengthened
-#: reference, the declarative set, and their composition. This is the reporting
-#: order; ``arm_order`` decides the order they are *evaluated* in.
+#: reference, the declarative set, and their composition. This is the order they are
+#: *persisted* in -- ``run_task`` sorts by it before writing, so two runs are
+#: diffable -- while ``arm_order`` decides the order they are *evaluated* in.
 ARM_NAMES = ("allclose", "reference", "declarative", "hybrid")
 
 
@@ -75,9 +76,16 @@ def arm_order(seed: int) -> list[str]:
     position. See ``run_task``'s docstring for the measured magnitudes, which sit
     near the clock's noise floor.
 
-    Derived from the run's own seed rather than from entropy, because a run must
-    replay: the same seed must give the same order, or two runs of "the same"
-    experiment are not comparable even in principle.
+    Derived from a seed rather than from entropy, because a run must replay: the same
+    seed must give the same order, or two runs of "the same" experiment are not
+    comparable even in principle.
+
+    ``run_task`` takes that seed as its own ``arm_order_seed`` parameter, separate
+    from the corpus seed, and the separation is the point. The experiment that
+    consumes this randomization is repeated timing of *one* corpus; driving both from
+    one seed would make every repetition evaluate the arms identically and leave the
+    position bias fully systematic for exactly that measurement, while varying the
+    corpus seed to shake the order would confound arm position with the inputs.
     """
     rng = np.random.default_rng([seed, 0xA6])
     return [ARM_NAMES[index] for index in rng.permutation(len(ARM_NAMES))]
@@ -286,6 +294,7 @@ def run_task(
     seed: int,
     kernel_id: str,
     kernel_is_broken: bool | None = None,
+    arm_order_seed: int | None = None,
 ) -> None:
     """Record one kernel's executions for one task, then score them with both arms.
 
@@ -397,7 +406,16 @@ def run_task(
         "declarative": declarative,
         "hybrid": HybridOracle(declarative=declarative, reference=reference),
     }
-    arms: list[Oracle] = [by_name[name] for name in arm_order(seed)]
+    # NOT `seed`. The corpus seed and the arm-order seed are separate parameters
+    # because the experiment that consumes the randomization is *repeated timing of
+    # one corpus*: passing the corpus seed here would make every repetition of
+    # seed=42 evaluate the arms in the identical order, leaving the position bias
+    # fully systematic for exactly that measurement. Varying the corpus seed instead
+    # would confound arm position with the inputs, so averaging would converge on
+    # cost and on a different corpus at once. Defaults to `seed` so a single run is
+    # still reproducible from its seed alone.
+    order = arm_order(seed if arm_order_seed is None else arm_order_seed)
+    arms: list[Oracle] = [by_name[name] for name in order]
 
     scored: list[ArmScores] = []
     for oracle in arms:
@@ -425,6 +443,12 @@ def run_task(
     # table. A second read would verify the join for a corpus that may differ from the
     # scored one — which is the "execution table rewritten after scoring" attack, run by
     # the driver against itself.
+    # Sorted into ARM_NAMES order *after* the clock has stopped, alongside the group
+    # keying that is likewise excluded from the timing. Without this the on-disk arm
+    # order is whatever arm_order() chose, so two runs of the same task under
+    # different seeds produce score files whose rows are permuted for reasons
+    # unrelated to the data, and any diff or fingerprint of the two sees noise.
+    scored.sort(key=lambda arm: ARM_NAMES.index(arm.arm))
     _verify_join(rows, scored)
     # The identity is read back off the table rather than minted here, so the scores can
     # only ever claim the corpus that is actually on disk beside them.

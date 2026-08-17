@@ -25,6 +25,11 @@ HELPER_PREFIX = "__"
 # `row.outputs[OUTPUT_NAME]`.
 OUTPUT_NAME = "y"
 
+# The name of the primary input tensor. `relations.py` derives its partners from it
+# and `Case.dtype`/`Case.shape` describe it, so a property that needs to look at what
+# the kernel was *given* — rather than only at what it returned — reads this key.
+PRIMARY_INPUT = "x"
+
 # Telemetry keys every backend must populate. Telemetry cannot be backfilled —
 # re-running a Trainium job to recover a missing counter is the exact cost this
 # architecture exists to avoid — so a Phase 3 backend writing "wall_time_ms"
