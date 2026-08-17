@@ -54,6 +54,7 @@ import pyarrow.parquet as pq
 from safetensors.numpy import load_file, save_file
 
 from autokernel_pbt.props.backends.base import ExecutionResult, Status
+from autokernel_pbt.props.backends.telemetry import _Missing
 from autokernel_pbt.props.case import Case
 from autokernel_pbt.props.spec import CaseSpec
 
@@ -167,6 +168,11 @@ def _json_safe(obj: Any) -> Any:
         return obj.item()
     if isinstance(obj, np.ndarray):
         return obj.tolist()
+    if isinstance(obj, _Missing):
+        # A field the toolchain did not report. Encoded as null so it round-trips as
+        # None, which stays distinguishable from 0 -- the whole reason the sentinel
+        # exists rather than a default of zero.
+        return None
     msg = f"telemetry value is not JSON-serializable: {obj!r}"
     raise TypeError(msg)
 
