@@ -1,0 +1,64 @@
+feature_id: "0006"
+feature_name: four-arms
+version: 1
+
+criteria:
+  - id: ALLCLOSE_ARM_IS_UNMODIFIED
+    description: the fourth arm uses numpy's default tolerances, not tuned ones
+    check:
+      type: unit_test
+      test: tests/unit/props/test_oracle.py::test_allclose_arm_uses_numpy_defaults
+
+  - id: ALLCLOSE_ARM_DETECTS
+    description: the fourth arm fails an output its reference rejects
+    check:
+      type: unit_test
+      test: tests/unit/props/test_oracle.py::test_allclose_arm_fails_a_diverging_output
+
+  - id: DECLARATIVE_ARM_DETECTS
+    description: the declarative arm fails a kernel that violates a declared property
+    check:
+      type: unit_test
+      test: tests/unit/props/test_oracle.py::test_declarative_oracle_fails_a_violating_kernel
+
+  - id: HYBRID_ARM_COMPOSES
+    description: the hybrid arm reports both its declarative and reference components
+    check:
+      type: unit_test
+      test: tests/unit/props/test_oracle.py::test_hybrid_oracle_reports_both_components
+
+  - id: FOUR_ARMS_SCORE_ONE_RUN
+    description: one recorded run is scored by all four arms
+    check:
+      type: unit_test
+      test: tests/integration/test_four_arms.py::test_four_arms_score_one_recorded_run
+
+  - id: LAUNCH_ERROR_IS_NEVER_A_CAUGHT_BUG
+    description: a failed execution is inconclusive in every arm, never a failure
+    check:
+      type: unit_test
+      test: tests/integration/test_four_arms.py::test_launch_error_is_inconclusive_in_every_arm
+
+  - id: ARM_ORDER_IS_RANDOMIZED
+    description: arm evaluation order varies with the seed, so timing bias is not systematic
+    check:
+      type: unit_test
+      test: tests/unit/props/test_driver.py::test_arm_order_varies_with_seed
+
+  - id: CASE_SPEC_REGENERATES
+    description: a case group is byte-identical when rebuilt from its spec
+    check:
+      type: unit_test
+      test: tests/unit/props/test_spec.py::test_group_from_spec_is_byte_identical
+
+  - id: LAYERNORM_CONTRACT_BUILDS_AN_ORACLE
+    description: layernorm's acceptance.yaml constructs a declarative oracle
+    check:
+      type: unit_test
+      test: tests/unit/props/test_tasks.py::test_layernorm_contract_builds_an_oracle
+
+  - id: LAYERNORM_PROPERTIES_DETECT
+    description: the layernorm property set fails a kernel that skips the mean subtraction
+    check:
+      type: unit_test
+      test: tests/unit/props/test_properties.py::test_rows_have_zero_mean_fails_an_unsubtracted_output
