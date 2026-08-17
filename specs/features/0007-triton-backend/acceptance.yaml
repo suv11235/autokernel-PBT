@@ -1,0 +1,52 @@
+feature_id: "0007"
+feature_name: triton-backend
+version: 1
+
+criteria:
+  - id: TELEMETRY_SCHEMA_IS_COMPLETE
+    description: every declared telemetry key is present on every execution, or explicitly absent
+    check:
+      type: unit_test
+      test: tests/unit/props/backends/test_telemetry.py::test_every_declared_key_is_present
+
+  - id: MISSING_FIELDS_ARE_RECORDED_NOT_DROPPED
+    description: a field the toolchain does not report is recorded as missing, not omitted
+    check:
+      type: unit_test
+      test: tests/unit/props/backends/test_telemetry.py::test_an_unavailable_field_is_recorded_as_missing
+
+  - id: TELEMETRY_CARRIES_A_SCHEMA_VERSION
+    description: a reader can tell a run recorded before a field existed from one where it was absent
+    check:
+      type: unit_test
+      test: tests/unit/props/backends/test_telemetry.py::test_schema_version_is_recorded
+
+  - id: ADAPTER_SATISFIES_THE_BACKEND_PROTOCOL
+    description: TritonKernel is callable with numpy kwargs and returns a numpy array
+    check:
+      type: unit_test
+      test: tests/unit/props/backends/test_triton_kernel.py::test_adapter_is_callable_with_numpy_kwargs
+
+  - id: RECORDED_LAUNCH_IS_THE_LAUNCH_PERFORMED
+    description: the launcher receives exactly the grid recorded as telemetry
+    check:
+      type: unit_test
+      test: tests/unit/props/backends/test_triton_kernel.py::test_the_launcher_receives_exactly_the_grid_that_is_recorded
+
+  - id: STATUS_MAPPING_IS_TOTAL
+    description: every failure mode maps to a Status, with compile errors distinguished
+    check:
+      type: unit_test
+      test: tests/unit/props/backends/test_triton_backend.py::test_status_mapping_is_total
+
+  - id: COMPILE_ERROR_IS_DISTINGUISHED_FROM_LAUNCH_ERROR
+    description: a kernel that never compiled is not reported as a launch failure
+    check:
+      type: unit_test
+      test: tests/unit/props/backends/test_triton_backend.py::test_compile_failure_maps_to_compile_error
+
+  - id: TOLERANCE_SWEEP_SPANS_THE_RANGE
+    description: the sweep task reaches reduction lengths the ladder does not
+    check:
+      type: unit_test
+      test: tests/unit/props/test_tasks.py::test_tolerance_sweep_spans_a_wider_log2_range_than_the_ladder
