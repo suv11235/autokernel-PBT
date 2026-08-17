@@ -64,6 +64,7 @@ from autokernel_pbt.props.verdict import TIER_PORTABLE, PropertyResult, Verdict,
 #: also the marker that says whether ``HybridOracle`` actually consulted the
 #: reference arm on a given group — see ``HybridOracle`` for why that matters.
 REFERENCE_PROPERTY = "matches_reference"
+ALLCLOSE_PROPERTY = "allclose_matches_reference"
 
 # Detail strings, mirroring properties.py's vocabulary so a triage pass reading a
 # mixed result list sees one language rather than two.
@@ -358,6 +359,118 @@ class ReferenceOracle:
             detail = f"reference test ratio {ratio:.3g} >= {self.thresh}"
             return self._result(Verdict.FAIL, detail, case_id)
         return self._result(Verdict.PASS, f"ratio={ratio:.3g}", case_id)
+
+
+class AllcloseOracle:
+    """The field's default oracle, deliberately unmodified.
+
+    ``torch.allclose(candidate, reference)`` against an eager implementation is what
+    the kernel literature actually uses, and the design's critique is aimed at it.
+    ``ReferenceOracle`` here was strengthened into a LAPACK-style normalized test
+    ratio precisely so it would not be a strawman — but that strengthening is only
+    credible if a reader can see what the *unstrengthened* version scores on the very
+    same executions. Phase 1 measured the two as agreeing on float32 softmax at
+    n=4096; carrying this arm turns that measurement into something auditable rather
+    than something to be taken on trust.
+
+    So this arm is not tuned, and must not become tuned. ``rtol`` and ``atol`` are
+    numpy's documented defaults, pinned by a test. Improving it would delete the
+    comparison it exists to provide.
+
+    It shares ``ReferenceOracle``'s treatment of harness defects, and for the same
+    reasons — see that class for the full argument:
+
+    * an exception from the reference propagates;
+    * a non-finite reference output is INCONCLUSIVE naming the reference, because
+      ``allclose`` against NaN is False and would otherwise manufacture a false
+      positive out of a broken reference;
+    * a shape disagreement is FAIL, not INCONCLUSIVE, because nothing here knows the
+      correct shape independently and blinding the arm to wrong-shaped output would
+      hide a common real kernel bug. ``np.allclose`` *broadcasts*, so this check is
+      load-bearing rather than defensive: (2,3) against (2,1) would otherwise compare
+      successfully and silently.
+
+    The one place it must differ from ``ReferenceOracle``: an exact-dtype output is
+    fine here. A test ratio is undefined for int and bool, but ``allclose`` is not,
+    so this arm judges integer outputs the reference arm must abstain on. That is a
+    real difference in arm power and belongs in the comparison, not smoothed away.
+    """
+
+    name = "allclose"
+
+    def __init__(
+        self,
+        reference_fn: Callable[..., np.ndarray],
+        rtol: float = 1e-5,
+        atol: float = 1e-8,
+    ) -> None:
+        self.reference_fn = reference_fn
+        self.rtol = rtol
+        self.atol = atol
+
+    def evaluate(self, rows: list[ExecutionResult]) -> list[PropertyResult]:
+        _require_rows(self.name, rows)
+        return [self._check(row) for row in rows]
+
+    def _result(self, verdict: Verdict, detail: str, case_id: str) -> PropertyResult:
+        """Every result this arm emits, built in one place.
+
+        Centralized so ``case_id`` cannot be forgotten on one branch out of six.
+        This arm is per-row, so it always attributes to the case; there is no
+        group-scoped path here to get wrong.
+        """
+        return PropertyResult(
+            property_name=ALLCLOSE_PROPERTY,
+            tier=TIER_PORTABLE,
+            # A tolerance is the entire mechanism. This arm is the definition of
+            # tolerance-dependent detection, which is the contrast the headline
+            # claim draws against the structural declarative properties.
+            tolerance_free=False,
+            verdict=verdict,
+            detail=detail,
+            case_id=case_id,
+        )
+
+    def _check(self, row: ExecutionResult) -> PropertyResult:
+        case_id = row.case.case_id
+        # Status and output presence are independent conditions; a Phase 3 timeout
+        # can leave a partially written buffer behind.
+        if row.status != Status.OK:
+            return self._result(Verdict.INCONCLUSIVE, f"status={row.status!r}", case_id)
+        if OUTPUT_NAME not in row.outputs:
+            return self._result(
+                Verdict.INCONCLUSIVE, f"missing output {OUTPUT_NAME!r}", case_id
+            )
+
+        got = np.atleast_1d(row.outputs[OUTPUT_NAME])
+        if got.size == 0:
+            # allclose over zero elements is vacuously True. Taken at face value that
+            # is a PASS backed by no evidence, inflating the correct-kernel
+            # denominator of the false-positive rate.
+            return self._result(Verdict.INCONCLUSIVE, _EMPTY_DETAIL, case_id)
+
+        # Suppressed for the reason ReferenceOracle suppresses it: this project sets
+        # filterwarnings=["error"], so a numpy overflow inside the reference would
+        # raise under test config and pass silently under production config, in a
+        # project whose central claim is that arms score identical executions.
+        with np.errstate(all="ignore"):
+            expected = np.atleast_1d(np.asarray(self.reference_fn(**kernel_inputs(row.case))))
+
+        if expected.dtype.kind in "fc" and not np.all(np.isfinite(expected)):
+            detail = "reference output is non-finite; the reference, not the kernel"
+            return self._result(Verdict.INCONCLUSIVE, detail, case_id)
+
+        if expected.shape != got.shape:
+            detail = (
+                f"shape mismatch: output {got.shape} vs reference {expected.shape} "
+                f"(one of the two is wrong; this arm cannot tell which)"
+            )
+            return self._result(Verdict.FAIL, detail, case_id)
+
+        if np.allclose(got, expected, rtol=self.rtol, atol=self.atol):
+            return self._result(Verdict.PASS, "", case_id)
+        detail = f"allclose(rtol={self.rtol:g}, atol={self.atol:g}) rejected the output"
+        return self._result(Verdict.FAIL, detail, case_id)
 
 
 class DeclarativeOracle:

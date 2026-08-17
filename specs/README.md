@@ -18,6 +18,7 @@ Every feature starts as a **spec** before code. Tests are written from **accepta
 | [0002](./features/0002-correctness-harness/spec.md) | Multi-stage correctness | skeleton |
 | [0004](./features/0004-property-oracle-layer/spec.md) | Property/oracle layer (phase 1) | implemented |
 | [0005](./features/0005-measurable-runs/spec.md) | Measurable runs | implemented |
+| [0006](./features/0006-four-arms/spec.md) | Four arms and the normalization rung | implemented |
 
 ## Schemas
 

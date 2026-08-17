@@ -1,0 +1,47 @@
+# Acceptance contract for the layernorm task.
+#
+# This file IS the declarative oracle: `oracle_from_contract` builds the property
+# set from the criteria below, so adding or removing a criterion here changes what
+# the arm can catch.
+#
+# ZERO_MEAN and UNIT_VARIANCE are the pair that makes this arm work without a
+# reference. Either alone is weak: a kernel that centers but never divides satisfies
+# ZERO_MEAN, and a kernel that scales without centering can satisfy UNIT_VARIANCE.
+# Together they pin the output to the normalized family while naming no expected
+# value at all.
+#
+# FINITE_OUTPUT is not optional bookkeeping. ZERO_MEAN and UNIT_VARIANCE both decline
+# to report non-finite output so that one defect is counted once, deferring it to
+# FINITE_OUTPUT; a contract selecting them without it would abstain on every NaN and
+# record a clean miss, which is why the loader rejects that combination.
+#
+# There is deliberately NO unit-interval criterion. A layernorm output is unbounded
+# in both directions -- that is the point of it -- and asserting a range here would
+# fail every correct kernel.
+task_id: layernorm
+version: 1
+
+criteria:
+  - id: FINITE_OUTPUT
+    description: no output element is NaN or Inf, on any input the domain generates
+    check:
+      type: property
+      property: outputs_are_finite
+
+  - id: ZERO_MEAN
+    description: each row of the output has zero mean within its dtype's rounding budget
+    check:
+      type: property
+      property: rows_have_zero_mean
+
+  - id: UNIT_VARIANCE
+    description: each row has unit population variance, except rows a constant input zeroed
+    check:
+      type: property
+      property: rows_have_unit_variance
+
+  - id: SHIFT_INVARIANCE
+    description: adding a per-row constant to the input leaves the output unchanged
+    check:
+      type: property
+      property: shift_invariance

@@ -9,6 +9,7 @@ import numpy as np
 from autokernel_pbt.props.case import BASE_RELATION, Case, CaseGroup
 from autokernel_pbt.props.domain import InputDomain, TensorSpec
 from autokernel_pbt.props.relations import RELATIONS, Relation
+from autokernel_pbt.props.spec import CaseSpec
 
 
 def _sample(spec: TensorSpec, shape: tuple[int, ...], rng: np.random.Generator) -> np.ndarray:
@@ -75,34 +76,67 @@ class Generator:
         group's own tensor/relation specs, or ``shapes`` change. Editing
         ``shapes`` remaps index -> shape, which is a visible semantic change to
         what the domain means rather than an invisible value shift.
+
+        Every group is built by ``group_from_spec``, never alongside it. Two code
+        paths producing "the same" group is the drift that would make a regenerated
+        case differ from the recorded one by a bit -- and nothing would catch it
+        until a shrink reported a minimal case the run had never actually executed.
         """
         if n_groups < 0:
             raise ValueError(f"n_groups must be non-negative, got {n_groups}")
         coverage_warning = self._unexercised_shapes_warning(n_groups)
         if coverage_warning is not None:
             warnings.warn(coverage_warning, stacklevel=2)
-        groups: list[CaseGroup] = []
-        for index in range(n_groups):
-            # One independent stream per group: group i's bytes depend only on
-            # (seed, i) and the specs it actually reads -- never on how many groups
-            # were requested, nor on unrelated tensors or relations. The list-key
-            # form is a pure function of (seed, index), so a single group can be
-            # regenerated standalone; rng.spawn() would force a walk of 0..i-1.
-            rng = np.random.default_rng([self.seed, index])
+        return [self.group_from_spec(self._spec_for(index)) for index in range(n_groups)]
+
+    def _spec_for(self, index: int) -> CaseSpec:
+        """The recipe for group ``index`` under this generator's domain and seed."""
+        return CaseSpec(
+            seed=self.seed,
+            task_id=self.domain.task_id,
+            group_index=index,
             # Shape-first: cycle through every shape before repeating any.
-            shape = self.domain.shapes[index % len(self.domain.shapes)]
-            group_id = f"{self.domain.task_id}-g{index:05d}"
-            base = Case(
-                case_id=f"{group_id}-base",
-                group_id=group_id,
-                relation=BASE_RELATION,
-                task_id=self.domain.task_id,
-                dtype=self.domain.tensors[0].dtype,
-                shape=shape,
-                tensors={t.name: _sample(t, shape, rng) for t in self.domain.tensors},
+            shape=self.domain.shapes[index % len(self.domain.shapes)],
+            transforms=tuple(self.domain.relations),
+        )
+
+    def group_from_spec(self, spec: CaseSpec) -> CaseGroup:
+        """Rebuild one case group from its recipe.
+
+        Byte-identical to the original, because the rng is a pure function of
+        ``(seed, group_index)`` and the transforms are applied in recorded order.
+
+        A spec with a *reduced* transform list rebuilds the same base case with fewer
+        partners, which is the unit move a future shrinker makes. Note the base case
+        is unaffected by that reduction: each relation draws from the stream *after*
+        the base has been sampled, so dropping a trailing transform cannot perturb it.
+        Dropping a non-final one does change what the later relations draw, which is
+        why a shrinker must re-execute rather than assume.
+        """
+        if spec.task_id != self.domain.task_id:
+            msg = (
+                f"spec is for task {spec.task_id!r} but this generator carries a domain "
+                f"for {self.domain.task_id!r}; the rebuilt group would claim an id it "
+                f"cannot join back to"
             )
-            cases = [base]
-            for relation_name in self.domain.relations:
-                cases.append(self._relation(relation_name).derive(base, rng))
-            groups.append(CaseGroup(group_id=group_id, cases=tuple(cases)))
-        return groups
+            raise ValueError(msg)
+        # One independent stream per group: group i's bytes depend only on
+        # (seed, i) and the specs it actually reads -- never on how many groups
+        # were requested, nor on unrelated tensors or relations. The list-key
+        # form is a pure function of (seed, index), so a single group can be
+        # regenerated standalone; rng.spawn() would force a walk of 0..i-1.
+        rng = np.random.default_rng([spec.seed, spec.group_index])
+        group_id = f"{spec.task_id}-g{spec.group_index:05d}"
+        base = Case(
+            case_id=f"{group_id}-base",
+            group_id=group_id,
+            relation=BASE_RELATION,
+            task_id=spec.task_id,
+            dtype=self.domain.tensors[0].dtype,
+            shape=spec.shape,
+            tensors={t.name: _sample(t, spec.shape, rng) for t in self.domain.tensors},
+        )
+        cases = [base]
+        for relation_name in spec.transforms:
+            cases.append(self._relation(relation_name).derive(base, rng))
+        return CaseGroup(group_id=group_id, cases=tuple(cases), spec=spec)

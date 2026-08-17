@@ -107,6 +107,40 @@ def softmax_reference(x: np.ndarray) -> np.ndarray:
     return (exp / np.sum(exp, axis=-1, keepdims=True)).astype(x.dtype)
 
 
+#: Added to the row variance before the square root. 1e-5 is PyTorch's ``LayerNorm``
+#: default, chosen so the reference matches the implementation a kernel author is most
+#: likely to have been targeting.
+LAYERNORM_EPS = 1e-5
+
+
+def layernorm_reference(x: np.ndarray) -> np.ndarray:
+    """Row-wise layer normalization over the last axis, without affine parameters.
+
+    No learnable scale or shift. Those are a separate op, fused in practice, and
+    including them would mean handing the declarative arm weights it plays no part in
+    choosing; the normalization itself is what has interesting properties.
+
+    Variance is the *population* variance (divide by n), matching PyTorch and every
+    kernel implementation of it. The sample variance would put the reference a factor
+    of sqrt(n/(n-1)) away from every correct kernel -- 8% at the ladder's (3, 7) rung,
+    far above any tolerance -- so every kernel would be booked as a caught bug.
+
+    Accumulation is in float64 and the result cast back, exactly as
+    ``softmax_reference`` does: the reference is the trusted side and is allowed a
+    wider intermediate, while the arms measure the residual against the dtype the
+    kernel actually produced.
+
+    ``eps`` goes *inside* the square root, which is where PyTorch puts it. Outside, a
+    constant row gives 0/eps rather than 0/sqrt(eps) -- a different value, for a case
+    the ladder reaches at two of its nine rungs.
+    """
+    wide = np.asarray(x, dtype=np.float64)
+    mean = np.mean(wide, axis=-1, keepdims=True)
+    centered = wide - mean
+    variance = np.mean(centered * centered, axis=-1, keepdims=True)
+    return (centered / np.sqrt(variance + LAYERNORM_EPS)).astype(x.dtype)
+
+
 @dataclass(frozen=True)
 class Task:
     """One rung of the development ladder.
@@ -159,9 +193,50 @@ SOFTMAX = Task(
     ),
 )
 
+#: Row-wise layer normalization. The normalization rung: it introduces mean-zero and
+#: unit-variance, which are structural facts about the output that need no reference
+#: implementation to check, and a division whose denominator can be driven to zero --
+#: a second numerical-stability story independent of softmax's overflow one.
+#:
+#: ``shift_rows`` is carried because layernorm is *exactly* shift invariant in real
+#: arithmetic: subtracting the row mean removes any per-row constant. Unlike softmax,
+#: whose shift invariance breaks only when ``exp`` overflows and which therefore needs
+#: overflow-scale shifts to be non-vacuous, this is a genuine algebraic law at any
+#: scale. The relation's dtype-derived default scale is kept anyway, because a kernel
+#: that computes its mean in reduced precision degrades exactly there.
+#: MEASURED, and the reason this task does not share softmax's N(0, 1) inputs.
+#: Under N(0, 1) a layernorm output and a *merely centered* output both have row
+#: variance near 1 -- the sample variance of 8 standard normal draws ran 0.31 to 1.04
+#: on the first ladder rung -- so ``rows_have_unit_variance`` barely discriminated the
+#: exact defect it exists to catch. Widening the input makes an undivided row's
+#: variance ~33, which the property separates from 1 decisively.
+#:
+#: It also fixes a false alarm. The deviation of a *correct* output's variance from 1
+#: is not rounding, it is the ``eps`` inside the square root: ``var/(var + eps) - 1``
+#: reproduced every observed value exactly. That term scales as ``eps/var``, so it
+#: grows as the row variance shrinks -- 3.2e-5 at var=0.31, against a rounding budget
+#: of 2.9e-5, which is a FAIL on a correct reference. At var~33 the same term is
+#: ~3e-7, two orders below the budget. See
+#: ``test_layernorm_properties_pass_the_real_reference``, which pins that margin so
+#: narrowing this distribution fails loudly rather than silently reintroducing it.
+LAYERNORM = Task(
+    task_id="layernorm",
+    domain=InputDomain(
+        task_id="layernorm",
+        tensors=(
+            TensorSpec(
+                name="x", dtype="float32", distribution="uniform", low=-10.0, high=10.0
+            ),
+        ),
+        shapes=_LADDER_SHAPES,
+        relations=(ShiftRows.name,),
+    ),
+)
+
+
 #: Name -> task. Keyed off each task's own ``task_id`` so a key and the ids
 #: stamped into its recorded rows cannot disagree.
-TASKS: dict[str, Task] = {task.task_id: task for task in (RELU, SOFTMAX)}
+TASKS: dict[str, Task] = {task.task_id: task for task in (RELU, SOFTMAX, LAYERNORM)}
 
 #: Reference implementation per task, for the reference arm. Kept separate from
 #: ``Task`` because a reference is harness-side and not serializable: ``Task`` is
@@ -170,4 +245,5 @@ TASKS: dict[str, Task] = {task.task_id: task for task in (RELU, SOFTMAX)}
 REFERENCES = {
     RELU.task_id: relu_reference,
     SOFTMAX.task_id: softmax_reference,
+    LAYERNORM.task_id: layernorm_reference,
 }

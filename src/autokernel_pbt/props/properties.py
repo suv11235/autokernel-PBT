@@ -339,22 +339,146 @@ class ShiftInvariance:
         return _result(self, Verdict.PASS, f"ratio={ratio:.3g}", group_id=group_id)
 
 
+class RowsHaveZeroMean:
+    """Each row of a layernorm output has approximately zero mean.
+
+    Structural: it follows from the definition and needs no reference implementation,
+    which is what makes it a declarative-arm property rather than a reference-arm one.
+    It catches the most common layernorm defect -- a kernel that computes the variance
+    but forgets to subtract the mean, or subtracts one computed over the wrong axis.
+
+    NOT tolerance-free, and the distinction matters to the headline claim. A float sum
+    of n centered values is not exactly zero; it is bounded by roughly n*eps*max|y|.
+    Declaring this tolerance-free would inflate the count the project's sharpest claim
+    rests on, so it carries a threshold and says so.
+    """
+
+    name = "rows_have_zero_mean"
+    tier = TIER_PORTABLE
+    tolerance_free = False
+    defers_nonfinite_to = OutputsAreFinite.name
+
+    def check(self, row: ExecutionResult) -> PropertyResult:
+        case_id = row.case.case_id
+        if not _usable(row):
+            return _result(self, Verdict.INCONCLUSIVE, _unusable_detail(row), case_id=case_id)
+        y = row.outputs[OUTPUT_NAME]
+        if reason := _unjudgeable(y):
+            return _result(self, Verdict.INCONCLUSIVE, reason, case_id=case_id)
+        if not np.all(np.isfinite(y)):
+            # OutputsAreFinite reports this; a mean over NaN is not a centering defect.
+            return _result(self, Verdict.INCONCLUSIVE, _NONFINITE_DETAIL, case_id=case_id)
+        if y.dtype.kind not in "fc":
+            # An int-returning kernel cannot be judged on a rounding budget expressed
+            # in eps. FAIL would book a possibly-correct kernel as a caught bug.
+            return _result(self, Verdict.INCONCLUSIVE, _EXACT_DTYPE_DETAIL, case_id=case_id)
+
+        wide = np.asarray(y, dtype=np.float64)
+        means = np.mean(wide, axis=-1)
+        # Scaled by the row width and the output's own magnitude: a wide row
+        # accumulates more rounding, and a row of large values does so faster. The
+        # max(..., 1.0) floor keeps an all-zero output -- which a constant input
+        # legitimately produces -- from being held to an exactly-zero mean.
+        eps = float(np.finfo(y.dtype).eps)
+        bound = DEFAULT_THRESH * eps * y.shape[-1] * max(float(np.max(np.abs(wide))), 1.0)
+        worst = float(np.max(np.abs(means)))
+        if worst > bound:
+            detail = f"largest row mean {worst:.3g} exceeds {bound:.3g}"
+            return _result(self, Verdict.FAIL, detail, case_id=case_id)
+        return _result(self, Verdict.PASS, f"max|mean|={worst:.3g}", case_id=case_id)
+
+
+class RowsHaveUnitVariance:
+    """Each row of a layernorm output has approximately unit population variance.
+
+    The complement of ``RowsHaveZeroMean``: together they pin the output to the
+    normalized family without naming a single expected value, which is the
+    declarative arm's whole shape. A kernel that centers but never divides passes the
+    mean check and fails this one.
+
+    An all-zero output ABSTAINS rather than failing. Layernorm of a constant row is
+    identically zero -- variance zero, not one -- because ``eps`` dominates the
+    denominator. That is correct behaviour, and the ladder reaches it at the (1, 1)
+    and (17, 1) rungs. Scoring those rows would fail every correct kernel on two of
+    nine rungs, manufacturing a false-positive rate out of the corpus rather than
+    measuring one.
+
+    That abstention is a second instance of the ladder's known detection deflation,
+    and any absolute rate reported for layernorm must subtract it exactly as
+    softmax's does.
+    """
+
+    name = "rows_have_unit_variance"
+    tier = TIER_PORTABLE
+    tolerance_free = False
+    defers_nonfinite_to = OutputsAreFinite.name
+
+    def check(self, row: ExecutionResult) -> PropertyResult:
+        case_id = row.case.case_id
+        if not _usable(row):
+            return _result(self, Verdict.INCONCLUSIVE, _unusable_detail(row), case_id=case_id)
+        y = row.outputs[OUTPUT_NAME]
+        if reason := _unjudgeable(y):
+            return _result(self, Verdict.INCONCLUSIVE, reason, case_id=case_id)
+        if not np.all(np.isfinite(y)):
+            return _result(self, Verdict.INCONCLUSIVE, _NONFINITE_DETAIL, case_id=case_id)
+        if y.dtype.kind not in "fc":
+            return _result(self, Verdict.INCONCLUSIVE, _EXACT_DTYPE_DETAIL, case_id=case_id)
+
+        wide = np.asarray(y, dtype=np.float64)
+        variances = np.var(wide, axis=-1)
+        # A row that is identically zero came from a constant input; see the
+        # docstring. Judging it would fail every correct kernel on those rungs.
+        judged = variances[~np.isclose(variances, 0.0, atol=1e-12)]
+        if judged.size == 0:
+            detail = "every row had zero variance, which a constant input makes correct"
+            return _result(self, Verdict.INCONCLUSIVE, detail, case_id=case_id)
+
+        eps = float(np.finfo(y.dtype).eps)
+        bound = DEFAULT_THRESH * eps * y.shape[-1]
+        worst = float(np.max(np.abs(judged - 1.0)))
+        if worst > bound:
+            detail = f"largest row variance deviation {worst:.3g} exceeds {bound:.3g}"
+            return _result(self, Verdict.FAIL, detail, case_id=case_id)
+        return _result(self, Verdict.PASS, f"max|var-1|={worst:.3g}", case_id=case_id)
+
+
 # Name -> class, so Task 13 can build a property set from a kernel's acceptance.yaml
 # by name. Keyed off each class's own ``name`` rather than a hand-written literal, so
 # the registry key and the recorded ``property_name`` cannot disagree.
 CASE_PROPERTY_REGISTRY: dict[str, type[CaseProperty]] = {
-    cls.name: cls for cls in (OutputsAreFinite, ValuesInUnitInterval, RowsSumToOne)
+    cls.name: cls
+    for cls in (
+        OutputsAreFinite,
+        ValuesInUnitInterval,
+        RowsSumToOne,
+        RowsHaveZeroMean,
+        RowsHaveUnitVariance,
+    )
 }
 GROUP_PROPERTY_REGISTRY: dict[str, type[GroupProperty]] = {
     cls.name: cls for cls in (ShiftInvariance,)
 }
 
-SOFTMAX_CASE_PROPERTIES: tuple[CaseProperty, ...] = tuple(
-    cls() for cls in CASE_PROPERTY_REGISTRY.values()
+# The per-task bundles name their members EXPLICITLY rather than taking everything in
+# the registry. That shortcut was correct while every registered property happened to
+# be true of softmax, and silently wrong the moment it stopped being: layernorm's
+# rows_have_zero_mean holds for no softmax output at all (a softmax row sums to one,
+# so its mean is 1/n), and a registry-wide bundle would have made the declarative arm
+# fail every correct softmax kernel while looking like a detection.
+SOFTMAX_CASE_PROPERTIES: tuple[CaseProperty, ...] = (
+    OutputsAreFinite(),
+    ValuesInUnitInterval(),
+    RowsSumToOne(),
 )
-SOFTMAX_GROUP_PROPERTIES: tuple[GroupProperty, ...] = tuple(
-    cls() for cls in GROUP_PROPERTY_REGISTRY.values()
+SOFTMAX_GROUP_PROPERTIES: tuple[GroupProperty, ...] = (ShiftInvariance(),)
+
+LAYERNORM_CASE_PROPERTIES: tuple[CaseProperty, ...] = (
+    OutputsAreFinite(),
+    RowsHaveZeroMean(),
+    RowsHaveUnitVariance(),
 )
+LAYERNORM_GROUP_PROPERTIES: tuple[GroupProperty, ...] = (ShiftInvariance(),)
 
 
 def _check_registries() -> None:

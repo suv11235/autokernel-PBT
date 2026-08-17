@@ -1,9 +1,51 @@
 # Design: Phase 2a — completing the measurement instrument
 
 **Date:** 2026-08-16
-**Status:** Approved (design); implementation plan pending
+**Status:** Partly superseded — see §0. The decisions in §2 stand; the storage architecture in
+§3.1–3.2 does not.
 **Scope:** The instrument that Phase 2b's measurement runs on. Corpus, metrics, and the
 experiment itself are explicitly out of scope and get their own design.
+
+---
+
+## 0. Status amendment (2026-08-16, after phase 1.5)
+
+Phase 1.5 "measurable runs" landed independently and in parallel with this design, and built
+much of §3 by a different route. This section records what survived and what did not, rather
+than editing the document to look prescient.
+
+**Superseded.** §3.1's append-only, one-file-per-writer layout and §3.2's argument that it
+retires `REPLAY_FAIRNESS` as an assertion. Phase 1.5 chose the alternative the design
+considered and rejected — kernel identity as a *column* on the execution row — and added
+`corpus_fingerprint`, a per-write identity that makes a join between two different runs fail
+loudly instead of silently reporting a rate about neither.
+
+The consequence, verified empirically rather than read off the source: `run_dir` holds **one
+kernel**. A second `write()` replaces the first kernel's rows, and two kernels in a single
+write are rejected on the `case_id` payload collision. Multi-kernel comparison happens across
+run directories, which is what `corpus_fingerprint` exists to make safe.
+
+Replay fairness therefore remains a *checked* property rather than a structural one. That is
+the known cost, and the argument in §3.2 for why checking it has repeatedly failed still
+stands as a risk — it is now a risk the project carries knowingly rather than one it has
+retired.
+
+**Superseded.** The `ExperimentRunner`, kernel identity, and verdict persistence components of
+§3.3, all delivered as `props/driver.py`, `props/table.py` and `props/scores.py`. Open
+obligations 1, 2 and 4 are discharged.
+
+**Stands.** Every decision in §2 — the fourth arm, the taxonomy-derived corpus and its 66/34
+CPU-reproducible split, the shrinker interface without an algorithm, layernorm as the
+normalization rung, and instrumented authoring cost. None of it was built by phase 1.5.
+
+**Better than what this document claimed.** §3.3 assumed per-property verdicts could be
+aggregated however the metrics phase liked. Phase 1.5 measured that they cannot: the same 14
+detections give a rate of **0.778 or 0.222** depending on whether results or case groups are
+the unit. Scores are keyed by case group for that reason, and this design's silence on the
+question was a gap, not a simplification.
+
+**Feature numbering.** This design reserved feature id 0005; phase 1.5 used it for "measurable
+runs". The follow-on work is feature **0006**.
 
 **Predecessor:** `docs/superpowers/specs/2026-08-14-kernel-property-oracle-layer-design.md`
 (§5.5 Phase 2), `docs/superpowers/plans/2026-08-14-property-layer-phase-1.md`

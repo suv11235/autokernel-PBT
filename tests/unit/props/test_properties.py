@@ -17,11 +17,15 @@ from autokernel_pbt.props.case import BASE_RELATION, Case
 from autokernel_pbt.props.properties import (
     CASE_PROPERTY_REGISTRY,
     GROUP_PROPERTY_REGISTRY,
+    LAYERNORM_CASE_PROPERTIES,
+    LAYERNORM_GROUP_PROPERTIES,
     SOFTMAX_CASE_PROPERTIES,
     SOFTMAX_GROUP_PROPERTIES,
     CaseProperty,
     GroupProperty,
     OutputsAreFinite,
+    RowsHaveUnitVariance,
+    RowsHaveZeroMean,
     RowsSumToOne,
     ShiftInvariance,
     ValuesInUnitInterval,
@@ -143,6 +147,8 @@ def test_registries_are_keyed_by_property_name():
         "outputs_are_finite",
         "values_in_unit_interval",
         "rows_sum_to_one",
+        "rows_have_zero_mean",
+        "rows_have_unit_variance",
     }
     assert set(GROUP_PROPERTY_REGISTRY) == {"shift_invariance"}
 
@@ -163,9 +169,25 @@ def test_registered_classes_conform_to_their_scope_protocol():
     assert not isinstance(OutputsAreFinite(), GroupProperty)
 
 
-def test_softmax_bundles_match_the_registries():
-    assert {type(p) for p in SOFTMAX_CASE_PROPERTIES} == set(CASE_PROPERTY_REGISTRY.values())
-    assert {type(p) for p in SOFTMAX_GROUP_PROPERTIES} == set(GROUP_PROPERTY_REGISTRY.values())
+def test_per_task_bundles_are_a_subset_of_the_registries():
+    """Subset, not equality, and the difference is load-bearing.
+
+    The bundles used to be built from every registered property, which was correct
+    only while every property happened to hold for softmax. layernorm's
+    rows_have_zero_mean holds for no softmax output at all -- a softmax row sums to
+    one, so its mean is 1/n -- and a registry-wide bundle would have made the
+    declarative arm fail every correct softmax kernel while looking like a detection.
+    """
+    registered_cases = set(CASE_PROPERTY_REGISTRY.values())
+    registered_groups = set(GROUP_PROPERTY_REGISTRY.values())
+    for bundle in (SOFTMAX_CASE_PROPERTIES, LAYERNORM_CASE_PROPERTIES):
+        assert {type(p) for p in bundle} <= registered_cases
+    for bundle in (SOFTMAX_GROUP_PROPERTIES, LAYERNORM_GROUP_PROPERTIES):
+        assert {type(p) for p in bundle} <= registered_groups
+    # Non-vacuous: the two task bundles genuinely differ.
+    assert {type(p) for p in SOFTMAX_CASE_PROPERTIES} != {
+        type(p) for p in LAYERNORM_CASE_PROPERTIES
+    }
 
 
 # --------------------------------------------------------------------------
@@ -585,3 +607,135 @@ def test_unnormalized_kernel_fails_both_independent_properties():
     out_of_range = np.array([[-0.5, 0.5, 1.0], [2.0, -0.5, -0.5]], dtype=np.float32)
     assert ValuesInUnitInterval().check(_row(X, out_of_range)).verdict is Verdict.FAIL
     assert RowsSumToOne().check(_row(X, out_of_range)).verdict is Verdict.PASS
+
+
+# --------------------------------------------------------------------------
+# layernorm properties (feature 0006)
+# --------------------------------------------------------------------------
+
+
+def _layernorm(x: np.ndarray, eps: float = 1e-5) -> np.ndarray:
+    wide = np.asarray(x, dtype=np.float64)
+    centered = wide - np.mean(wide, axis=-1, keepdims=True)
+    variance = np.mean(centered * centered, axis=-1, keepdims=True)
+    return (centered / np.sqrt(variance + eps)).astype(x.dtype)
+
+
+#: Wide, like the layernorm task's own domain. On N(0, 1) a merely-centered output
+#: already has variance near 1, which is the measurement that moved the task off it.
+WIDE = np.array([[-9.0, -3.0, 4.0, 8.0], [7.0, -6.0, 2.0, -1.0]], dtype=np.float32)
+
+
+def test_rows_have_zero_mean_passes_a_normalized_output():
+    assert RowsHaveZeroMean().check(_row(WIDE, _layernorm(WIDE))).verdict is Verdict.PASS
+
+
+def test_rows_have_zero_mean_fails_an_unsubtracted_output():
+    """The criterion LAYERNORM_PROPERTIES_DETECT.
+
+    A kernel that scales but never subtracts the mean -- the defect this property
+    exists to catch, and one no reference implementation is needed to see.
+    """
+    wide = np.asarray(WIDE, dtype=np.float64)
+    scaled_only = (wide / np.sqrt(wide.var(axis=-1, keepdims=True) + 1e-5)).astype(np.float32)
+    assert RowsHaveZeroMean().check(_row(WIDE, scaled_only)).verdict is Verdict.FAIL
+
+
+def test_rows_have_unit_variance_passes_a_normalized_output():
+    assert RowsHaveUnitVariance().check(_row(WIDE, _layernorm(WIDE))).verdict is Verdict.PASS
+
+
+def test_rows_have_unit_variance_fails_an_unscaled_output():
+    # A kernel that centers but never divides: passes the mean check, fails this one.
+    wide = np.asarray(WIDE, dtype=np.float64)
+    centered_only = (wide - wide.mean(axis=-1, keepdims=True)).astype(np.float32)
+    assert RowsHaveUnitVariance().check(_row(WIDE, centered_only)).verdict is Verdict.FAIL
+
+
+def test_the_two_layernorm_properties_are_complementary():
+    """Neither alone pins the normalized family; that is why the contract has both.
+
+    Measured on the ladder: a centers-but-never-divides kernel is caught by
+    unit-variance on 14 of 18 cases and by zero-mean on none of them, while a
+    divides-but-never-centers kernel is caught by zero-mean on all 18 and by
+    unit-variance on none. A contract carrying only one of the pair would be blind
+    to exactly one of the two defects.
+    """
+    wide = np.asarray(WIDE, dtype=np.float64)
+    centered_only = (wide - wide.mean(axis=-1, keepdims=True)).astype(np.float32)
+    scaled_only = (wide / np.sqrt(wide.var(axis=-1, keepdims=True) + 1e-5)).astype(np.float32)
+
+    assert RowsHaveZeroMean().check(_row(WIDE, centered_only)).verdict is Verdict.PASS
+    assert RowsHaveUnitVariance().check(_row(WIDE, centered_only)).verdict is Verdict.FAIL
+    assert RowsHaveZeroMean().check(_row(WIDE, scaled_only)).verdict is Verdict.FAIL
+    assert RowsHaveUnitVariance().check(_row(WIDE, scaled_only)).verdict is Verdict.PASS
+
+
+def test_unit_variance_abstains_on_an_all_zero_output():
+    # Layernorm of a constant row is identically zero, not unit variance, because eps
+    # dominates the denominator. Correct behaviour, reached at the (1,1) and (17,1)
+    # rungs -- judging it would fail every correct kernel on two of nine rungs.
+    y = np.zeros((2, 4), dtype=np.float32)
+    assert RowsHaveUnitVariance().check(_row(WIDE, y)).verdict is Verdict.INCONCLUSIVE
+
+
+def test_neither_layernorm_property_is_tolerance_free():
+    # A float sum of n centered values is not exactly zero. Claiming otherwise would
+    # inflate the tolerance-free count the project's sharpest claim rests on.
+    assert RowsHaveZeroMean().tolerance_free is False
+    assert RowsHaveUnitVariance().tolerance_free is False
+
+
+def test_layernorm_properties_are_inconclusive_on_a_failed_execution():
+    for prop in (RowsHaveZeroMean(), RowsHaveUnitVariance()):
+        row = _row(WIDE, None, status=Status.LAUNCH_ERROR)
+        assert prop.check(row).verdict is Verdict.INCONCLUSIVE, prop.name
+
+
+def test_layernorm_properties_defer_non_finite_output():
+    # One defect counted once: OutputsAreFinite owns the NaN finding.
+    y = np.full((2, 4), np.nan, dtype=np.float32)
+    for prop in (RowsHaveZeroMean(), RowsHaveUnitVariance()):
+        assert prop.check(_row(WIDE, y)).verdict is Verdict.INCONCLUSIVE, prop.name
+
+
+def test_layernorm_properties_pass_the_real_reference():
+    """No false alarms anywhere on the ladder, with the margin pinned.
+
+    This is the test that caught the original defect. The deviation of a correct
+    output's variance from 1 is the reference's own ``eps`` regularization --
+    ``var/(var + eps) - 1``, which grows as row variance shrinks -- not rounding. On
+    N(0, 1) inputs that term reached 3.2e-5 against a 2.9e-5 budget and FAILed a
+    correct reference. The task's wide input distribution is what keeps it ~46x
+    below the budget, so this test fails loudly if that distribution is narrowed.
+    """
+    from autokernel_pbt.props.generator import Generator
+    from autokernel_pbt.props.tasks import REFERENCES, TASKS
+
+    worst = 0.0
+    for group in Generator(TASKS["layernorm"].domain, seed=0).generate(9):
+        for case in group.cases:
+            y = REFERENCES["layernorm"](x=case.tensors["x"])
+            row = ExecutionResult(case=case, outputs={OUTPUT_NAME: y})
+            for prop in LAYERNORM_CASE_PROPERTIES:
+                verdict = prop.check(row).verdict
+                assert verdict is not Verdict.FAIL, f"{prop.name} on {case.shape}"
+            variances = np.var(np.asarray(y, dtype=np.float64), axis=-1)
+            judged = variances[~np.isclose(variances, 0.0, atol=1e-12)]
+            if judged.size:
+                worst = max(worst, float(np.max(np.abs(judged - 1.0))))
+
+    budget = DEFAULT_THRESH * float(np.finfo(np.float32).eps) * 8
+    assert worst < budget / 10, f"margin has collapsed to {budget / worst:.1f}x"
+
+
+def test_layernorm_bundle_excludes_softmax_only_properties():
+    # The bundles name their members explicitly. A registry-wide bundle would put
+    # rows_have_zero_mean into softmax's set, where it holds for no output at all.
+    softmax_names = {p.name for p in SOFTMAX_CASE_PROPERTIES}
+    layernorm_names = {p.name for p in LAYERNORM_CASE_PROPERTIES}
+    assert "values_in_unit_interval" not in layernorm_names
+    assert "rows_sum_to_one" not in layernorm_names
+    assert "rows_have_zero_mean" not in softmax_names
+    assert "rows_have_unit_variance" not in softmax_names
+    assert {p.name for p in LAYERNORM_GROUP_PROPERTIES} == {"shift_invariance"}
