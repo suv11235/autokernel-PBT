@@ -47,11 +47,40 @@ from autokernel_pbt.props.contract import (
     oracle_from_contract,
 )
 from autokernel_pbt.props.generator import Generator
-from autokernel_pbt.props.oracle import Oracle, ReferenceOracle
+from autokernel_pbt.props.oracle import AllcloseOracle, HybridOracle, Oracle, ReferenceOracle
 from autokernel_pbt.props.scores import ArmScores, ScoreTable
 from autokernel_pbt.props.table import ExecutionTable
 from autokernel_pbt.props.tasks import Task
 from autokernel_pbt.props.verdict import PropertyResult, Verdict, summarize
+
+#: The four arms, in canonical order: the field's default, the strengthened
+#: reference, the declarative set, and their composition. This is the reporting
+#: order; ``arm_order`` decides the order they are *evaluated* in.
+ARM_NAMES = ("allclose", "reference", "declarative", "hybrid")
+
+
+def arm_order(seed: int) -> list[str]:
+    """The order to evaluate arms in for this run.
+
+    ``elapsed_s`` is order-biased: the arm that runs second inherits everything the
+    first one warmed. Under a *fixed* order that bias is systematic, so any
+    cost-per-bug comparison between arms partly measures position rather than cost.
+    With two arms that was already true; with four it is worse, because the last arm
+    would always enjoy the most warming.
+
+    Randomizing per run does not make a single run's timing fair — only repeated
+    timing with a reported spread does, and that belongs to the metrics phase where
+    the number is consumed. What it buys is that the bias no longer favours the same
+    arm every time, so averaging across runs converges on cost instead of on
+    position. See ``run_task``'s docstring for the measured magnitudes, which sit
+    near the clock's noise floor.
+
+    Derived from the run's own seed rather than from entropy, because a run must
+    replay: the same seed must give the same order, or two runs of "the same"
+    experiment are not comparable even in principle.
+    """
+    rng = np.random.default_rng([seed, 0xA6])
+    return [ARM_NAMES[index] for index in rng.permutation(len(ARM_NAMES))]
 
 
 def contract_path(task: Task, repo_root: Path) -> Path:
@@ -316,11 +345,15 @@ def run_task(
     stable, the magnitude is not, and at ~0.5 ms per arm the whole measurement sits near
     the clock's noise floor.
 
-    A usable cost-per-bug figure therefore needs repeated timing with randomized arm
-    order and a reported spread, and that belongs to the metrics phase, which is where
-    the number would be consumed. What this feature guarantees is only that the seconds
-    are *recorded* — they are the one quantity in these artifacts that re-scoring cannot
-    recover, because a second measurement is a different machine-minute.
+    Arm order is randomized per run as of feature 0006 — see ``arm_order`` — so that
+    bias is no longer *systematic*. A usable cost-per-bug figure still needs repeated
+    timing with a reported spread, and that belongs to the metrics phase, which is
+    where the number would be consumed; note also that at ~0.5 ms per arm the whole
+    measurement sits near the clock's noise floor, so randomization buys correctness
+    of method rather than precision. What this feature guarantees is only that the
+    seconds are *recorded* — they are the one quantity in these artifacts that
+    re-scoring cannot recover, because a second measurement is a different
+    machine-minute.
 
     Raises ``ValueError`` before writing any scores if the verdicts do not join the
     recorded rows; the execution table is left intact, because the executions are the
@@ -353,7 +386,18 @@ def run_task(
     # Built before the clock starts, and outside every arm's measurement, so the
     # contract load is not charged to the declarative arm's cost.
     declarative = oracle_from_contract(load_contract(contract_path(task, repo_root)))
-    arms: list[Oracle] = [ReferenceOracle(reference_fn), declarative]
+    reference = ReferenceOracle(reference_fn)
+    # allclose and reference are handed the *same* reference implementation, so every
+    # difference between their verdicts is the comparison method and nothing else.
+    # That is the whole reason the field's default is carried alongside the
+    # strengthened ratio rather than described in prose.
+    by_name: dict[str, Oracle] = {
+        "allclose": AllcloseOracle(reference_fn),
+        "reference": reference,
+        "declarative": declarative,
+        "hybrid": HybridOracle(declarative=declarative, reference=reference),
+    }
+    arms: list[Oracle] = [by_name[name] for name in arm_order(seed)]
 
     scored: list[ArmScores] = []
     for oracle in arms:

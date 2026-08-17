@@ -43,7 +43,7 @@ criteria:
     description: arm evaluation order varies with the seed, so timing bias is not systematic
     check:
       type: unit_test
-      test: tests/unit/props/test_driver.py::test_arm_order_varies_with_seed
+      test: tests/integration/test_driver.py::test_arm_order_varies_with_seed
 
   - id: CASE_SPEC_REGENERATES
     description: a case group is byte-identical when rebuilt from its spec

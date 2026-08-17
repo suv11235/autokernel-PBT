@@ -35,7 +35,7 @@ import yaml
 
 from autokernel_pbt.props.backends.numpy_backend import NumpyBackend
 from autokernel_pbt.props.contract import CONTRACT_FILENAME, KERNEL_TASKS_DIR
-from autokernel_pbt.props.driver import read_run, run_task
+from autokernel_pbt.props.driver import ARM_NAMES, arm_order, read_run, run_task
 from autokernel_pbt.props.generator import Generator
 from autokernel_pbt.props.oracle import REFERENCE_PROPERTY, DeclarativeOracle, ReferenceOracle
 from autokernel_pbt.props.properties import RowsSumToOne, ShiftInvariance
@@ -182,7 +182,9 @@ def test_both_arms_score_the_same_recorded_corpus(
     recorded_groups = {row.case.group_id for row in rows}
 
     arms = ScoreTable(run_dir).read()
-    assert {arm.arm for arm in arms} == {ReferenceOracle.name, DeclarativeOracle.name}
+    # Every arm the driver claims to run, not a hard-coded pair: adding a fifth arm
+    # must extend this test rather than slip past it.
+    assert {arm.arm for arm in arms} == set(ARM_NAMES)
 
     for arm in arms:
         judged_cases = {r.case_id for r in arm.results if r.case_id}
@@ -621,6 +623,37 @@ def test_arm_scores_are_written_once_per_arm(tmp_path: Path, repo_root: Path):
     run_dir = drive(tmp_path / "run", correct_softmax, "correct_softmax", False, repo_root)
     arms: list[ArmScores] = ScoreTable(run_dir).read()
     names = [arm.arm for arm in arms]
-    assert len(names) == len(set(names)) == 2, names
+    assert len(names) == len(set(names)) == len(ARM_NAMES), names
 
 
+
+
+# --------------------------------------------------------------------------- #
+# Arm evaluation order (feature 0006)
+# --------------------------------------------------------------------------- #
+
+
+def test_arm_order_varies_with_seed():
+    """The criterion ARM_ORDER_IS_RANDOMIZED.
+
+    ``elapsed_s`` is order-biased: the arm that runs second inherits everything the
+    first warmed. Under a fixed order that bias is systematic, so a cost-per-bug
+    comparison would partly measure position. This does not make one run's timing
+    fair -- only repetition does -- but it stops the bias favouring the same arm
+    every time.
+    """
+    orders = {tuple(arm_order(seed)) for seed in range(20)}
+    assert len(orders) > 1, "arm order is identical across every seed"
+
+
+def test_arm_order_is_a_permutation_of_every_arm():
+    # A shuffle that dropped or duplicated an arm would silently change what the
+    # experiment measures, and the coverage check would not see it.
+    for seed in range(10):
+        assert sorted(arm_order(seed)) == sorted(ARM_NAMES)
+
+
+def test_arm_order_is_deterministic_for_a_seed():
+    # A run must replay: same seed, same order, or two runs of "the same" experiment
+    # are not comparable even in principle.
+    assert arm_order(3) == arm_order(3)
