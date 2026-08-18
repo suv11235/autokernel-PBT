@@ -73,9 +73,16 @@ different number, and each invisible without an explicit check:
 
 So every candidate passes a gate before it is scored. To be admitted, a mutant must:
 
-- differ from its reference beyond tolerance on **at least one** case group, and
-- agree on **at least one** case group, or otherwise not fail everywhere for a trivial reason, and
-- return `Status.OK` on enough cases to be judgeable at all.
+- **differ from its reference beyond tolerance on at least one case group** — it is genuinely
+  broken; and
+- **return `Status.OK` on at least one case group** — it is judgeable at all, rather than
+  crashing everywhere and forcing every arm to abstain.
+
+Those two, and no more. An earlier draft also required the mutant to *agree* with the reference
+somewhere, on the theory that a kernel wrong everywhere is suspicious. That is wrong: a kernel
+that is wrong on every group is a perfectly ordinary bug and should score a detection rate of
+1.0. The criterion would have rejected valid mutants for being too easy to catch, which is
+exactly backwards.
 
 Rejected candidates are **recorded with their rejection reason**, not silently dropped. The
 rejection rate is itself a finding: it says what proportion of an agent's attempts at a named
