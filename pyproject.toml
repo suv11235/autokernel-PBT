@@ -57,6 +57,13 @@ line-length = 100
 target-version = "py310"
 
 [tool.ruff.lint.per-file-ignores]
+# Mutant bodies are recorded VERBATIM as returned by a blinded authoring agent, and
+# one of them contains a dead assignment. Deleting it would edit the mutant; a noqa
+# comment would touch the line. Neither is acceptable -- a mutant tidied by someone
+# who has seen the property set is no longer a blinded mutant, and the gate, not the
+# editor, is where unusable candidates are removed. Ignored per-file so the bodies
+# stay byte-identical to what the agent produced.
+"kernels/mutants/grown_mutants.py" = ["F841"]
 # TRY004 wants TypeError when a malformed value is the wrong *type*. The contract
 # loader deliberately raises ValueError for every defect in an acceptance.yaml —
 # blank ids, missing keys, unknown check types, non-mappings alike — because from a
