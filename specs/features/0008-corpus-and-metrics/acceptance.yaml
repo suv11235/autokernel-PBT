@@ -1,0 +1,58 @@
+feature_id: "0008"
+feature_name: corpus-and-metrics
+version: 1
+
+criteria:
+  - id: A_CORRECT_MUTANT_IS_REJECTED
+    description: a candidate that matches its reference everywhere is refused admission
+    check:
+      type: unit_test
+      test: tests/unit/corpus/test_gate.py::test_a_candidate_that_is_not_broken_is_rejected
+
+  - id: A_CATASTROPHIC_MUTANT_IS_REJECTED
+    description: a candidate that is unjudgeable everywhere is refused admission
+    check:
+      type: unit_test
+      test: tests/unit/corpus/test_gate.py::test_a_candidate_that_never_runs_is_rejected
+
+  - id: A_KERNEL_WRONG_EVERYWHERE_IS_ADMITTED
+    description: being wrong on every group is an ordinary bug, not grounds for rejection
+    check:
+      type: unit_test
+      test: tests/unit/corpus/test_gate.py::test_a_candidate_wrong_on_every_group_is_admitted
+
+  - id: REJECTIONS_CARRY_A_REASON
+    description: a refused candidate records why, because the rejection rate is a finding
+    check:
+      type: unit_test
+      test: tests/unit/corpus/test_gate.py::test_a_rejection_records_its_reason
+
+  - id: INTENDED_CLASS_IS_LABELLED_AS_INTENDED
+    description: the fault class is recorded as intended-by-construction, never as verified
+    check:
+      type: unit_test
+      test: tests/unit/corpus/test_mutant.py::test_fault_class_is_recorded_as_intended
+
+  - id: DETECTION_IS_KEYED_BY_GROUP
+    description: the rate counts case groups, not results
+    check:
+      type: unit_test
+      test: tests/unit/metrics/test_rates.py::test_detection_rate_counts_groups_not_results
+
+  - id: TOLERANCE_FREE_DETECTION_IS_SEPARATE
+    description: the headline claim has its own numerator
+    check:
+      type: unit_test
+      test: tests/unit/metrics/test_rates.py::test_tolerance_free_detection_has_its_own_numerator
+
+  - id: METRICS_COME_FROM_ARTIFACTS_ALONE
+    description: rates are computable from the two tables with no oracle in the loop
+    check:
+      type: unit_test
+      test: tests/unit/metrics/test_rates.py::test_rates_are_computed_from_the_tables_alone
+
+  - id: THE_REPORT_STATES_THE_DEFLATION
+    description: the ladder's known understatement appears beside the numbers
+    check:
+      type: unit_test
+      test: tests/unit/metrics/test_report.py::test_the_report_states_the_ladder_deflation

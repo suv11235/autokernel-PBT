@@ -27,6 +27,20 @@ PY
 echo "== installing the project (torch and triton come from Lambda Stack) =="
 python3 -m pip install --quiet -e ".[dev]"
 
+echo "== verifying torch<->numpy interop survived the install =="
+# The failure this guards is silent: pip upgrading numpy past torch's ABI leaves
+# torch importable but unable to convert arrays, and the Triton backend calls
+# torch.as_tensor(ndarray) on every launch. pyproject pins numpy<2; this proves it.
+python3 - <<'PYCHECK'
+import warnings
+warnings.simplefilter("error")
+import numpy as np
+import torch
+back = torch.as_tensor(np.ones((2, 3), dtype=np.float32), device="cuda").cpu().numpy()
+assert back.shape == (2, 3), back.shape
+print(f"  numpy {np.__version__} <-> torch {torch.__version__}: OK")
+PYCHECK
+
 echo "== CPU suite, to prove the checkout is sound before spending on device =="
 python3 -m pytest -m "not gpu" -q
 
