@@ -268,8 +268,18 @@ original float64 draws rather than the float32 input) and residual scaling (inf-
 mean, sum) each move the drift but neither makes `log₂n` flat or flattest. Full construction,
 tables and threats: `docs/measurements/2026-08-17-normalization-discrepancy-resolved.md`.
 
+**`n=1` is now settled, against it (2026-08-17).** Both the CPU re-measurement and the first GPU
+run found `n=1` flatter — but both were **single-tile** reductions, where the whole row reduces as
+one balanced tree. Measured on a multi-tile kernel with the tile count spanning 1 to 256, the
+ordering reverses: `n=1` drifts 7.6× and `log₂n` 5.9×, with the `n=1` column climbing steeply
+(0.51 → 3.57) once sequential cross-tile accumulation dominates. The apparent flatness was an
+artifact of the regime. Separately, the tightest bound measured is `log₂(tile) + n_tiles` at 3.5×,
+which needs the tile width — a launch property the Phase 3a telemetry already records. Not
+adopted: it changes the reference arm's definition and rests on one kernel and one GPU. See
+`docs/measurements/2026-08-17-hybrid-reduction-tree.md`.
+
 `log₂n` is unchanged and was never at risk — it is the textbook pairwise bound rather than a fit to
-either dataset. What changes is that **`n=1` now deserves the revisit this paragraph flagged**: on
+either dataset. The superseded reasoning follows: **`n=1` was thought to deserve a revisit**: on
 the corrected construction `1` is flatter than `log₂n` (1.2–1.3× against 2.3–4.1×) under every
 reference and residual variant measured, and the reason it was not revisited — that two harnesses
 disagreed — no longer holds. Flatness is only one criterion; `1` is also *stricter*, and the

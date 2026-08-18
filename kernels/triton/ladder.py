@@ -92,6 +92,48 @@ def _layernorm_kernel(x_ptr, y_ptr, n_cols, EPS: tl.constexpr, BLOCK: tl.constex
     tl.store(y_ptr + row * n_cols + offs, centered / tl.sqrt(var + EPS), mask=mask)
 
 
+@triton.jit
+def _softmax_wide_kernel(x_ptr, y_ptr, n_cols, BLOCK: tl.constexpr):
+    """Softmax over a row WIDER than one tile: three passes, looping over tiles.
+
+    This exists to exercise a reduction tree the single-tile kernels never build. A
+    row that fits in one tile reduces as a single balanced tree of depth log2(BLOCK),
+    which is the pairwise bound `log2(n)` normalization assumes. A row spanning
+    `n_cols / BLOCK` tiles reduces as a *hybrid*: a balanced tree inside each tile,
+    then SEQUENTIAL accumulation across tiles. Sequential accumulation is the regime
+    whose error bound is linear in the number of terms, so if the tile count is large
+    the total error may grow faster than `log2(n)` predicts -- which would mean the
+    reference arm under-normalizes exactly where real kernels operate.
+
+    Three passes rather than an online/streaming formulation: the numerics of
+    streaming softmax (rescaling a running sum as the max moves) are a different
+    question, and mixing them in would confound the tree-shape measurement with a
+    different algorithm's error behaviour.
+    """
+    row = tl.program_id(0)
+    base = row * n_cols
+
+    running_max = -float("inf")
+    for start in range(0, n_cols, BLOCK):
+        offs = start + tl.arange(0, BLOCK)
+        mask = offs < n_cols
+        x = tl.load(x_ptr + base + offs, mask=mask, other=-float("inf"))
+        running_max = tl.maximum(running_max, tl.max(x, axis=0))
+
+    running_sum = 0.0
+    for start in range(0, n_cols, BLOCK):
+        offs = start + tl.arange(0, BLOCK)
+        mask = offs < n_cols
+        # other=-inf so a masked lane contributes exp(-inf) = 0 to the sum.
+        x = tl.load(x_ptr + base + offs, mask=mask, other=-float("inf"))
+        running_sum += tl.sum(tl.exp(x - running_max), axis=0)
+
+    for start in range(0, n_cols, BLOCK):
+        offs = start + tl.arange(0, BLOCK)
+        mask = offs < n_cols
+        x = tl.load(x_ptr + base + offs, mask=mask, other=0.0)
+        tl.store(y_ptr + base + offs, tl.exp(x - running_max) / running_sum, mask=mask)
+
 def _rows_grid(shape, constexprs):
     """One program per row. `shape` is the primary input's shape."""
     return (shape[0],)
@@ -175,6 +217,39 @@ def layernorm_kernel(n_cols: int) -> TritonKernel:
         launcher=_launcher(_layernorm_kernel),
     )
 
+
+def _wide_launcher(jit_kernel):
+    """Launcher for the multi-tile kernel: the tile is deliberately smaller than the row.
+
+    Does not carry `_launcher`'s `cols > BLOCK` guard, because for this kernel that
+    is the point rather than a defect -- it loops until the row is consumed.
+    """
+
+    def launch(*, grid, constexprs, record_compiled, **inputs):
+        x = inputs["x"]
+        cols = x.shape[-1]
+        xd = torch.as_tensor(x, device="cuda")
+        yd = torch.empty_like(xd)
+        before = device_digest(xd)
+        compiled = jit_kernel[grid](xd, yd, cols, **constexprs)
+        record_compiled(compiled)
+        if device_digest(xd) != before:
+            msg = "kernel modified its input tensor(s) ['x'] on device"
+            raise InputMutatedError(msg)
+        return yd.cpu().numpy()
+
+    return launch
+
+
+def softmax_wide_kernel(tile: int) -> TritonKernel:
+    """Softmax with an EXPLICIT tile width, so the row spans `n_cols / tile` tiles."""
+    return TritonKernel(
+        kernel_id=f"softmax_wide_triton_tile{tile}",
+        jit_fn=_softmax_wide_kernel,
+        grid=_rows_grid,
+        constexprs={"BLOCK": tile},
+        launcher=_wide_launcher(_softmax_wide_kernel),
+    )
 
 #: The tolerance sweep is softmax over wider reductions, so it reuses that kernel.
 KERNELS = {
