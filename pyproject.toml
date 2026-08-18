@@ -10,7 +10,11 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 dependencies = [
-  "numpy>=1.24",
+  # Upper bound is load-bearing, not caution. Lambda Stack's torch is built against
+  # numpy 1.x; installing 2.x over it destroys torch's numpy interop silently --
+  # `Failed to initialize NumPy: _ARRAY_API not found` -- and the Triton backend calls
+  # torch.as_tensor(ndarray) on every launch. Measured on the first hardware run.
+  "numpy>=1.24,<2",
   "pyyaml>=6.0",
   "jsonschema>=4.20",
   "safetensors>=0.4",

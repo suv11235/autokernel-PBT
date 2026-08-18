@@ -727,3 +727,33 @@ def test_scores_are_persisted_in_canonical_arm_order(tmp_path: Path, repo_root: 
         )
         persisted = [arm.arm for arm in ScoreTable(run_dir).read()]
         assert persisted == list(ARM_NAMES), f"seed {seed} persisted {persisted}"
+
+
+def test_the_backend_is_injectable(tmp_path: Path, repo_root: Path):
+    """Phase 2b records the same corpus on either substrate through one driver.
+
+    Defaults to NumPy rather than detecting a device: every CPU caller predates the
+    parameter, and a device backend that silently became the default would make a
+    CPU-only checkout fail at import.
+    """
+    from autokernel_pbt.props.backends.numpy_backend import NumpyBackend
+
+    seen = []
+
+    class Recording(NumpyBackend):
+        def run(self, kernel, case):
+            seen.append(case.case_id)
+            return super().run(kernel, case)
+
+    run_task(
+        task=SOFTMAX,
+        kernel=correct_softmax,
+        reference_fn=softmax_reference,
+        run_dir=tmp_path / "run",
+        repo_root=repo_root,
+        n_groups=ALL_SHAPES,
+        seed=SEED,
+        kernel_id="k",
+        backend=Recording(),
+    )
+    assert seen, "the injected backend was never used"

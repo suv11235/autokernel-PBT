@@ -38,7 +38,7 @@ from pathlib import Path
 
 import numpy as np
 
-from autokernel_pbt.props.backends.base import ExecutionResult
+from autokernel_pbt.props.backends.base import Backend, ExecutionResult
 from autokernel_pbt.props.backends.numpy_backend import NumpyBackend
 from autokernel_pbt.props.contract import (
     CONTRACT_FILENAME,
@@ -295,6 +295,7 @@ def run_task(
     kernel_id: str,
     kernel_is_broken: bool | None = None,
     arm_order_seed: int | None = None,
+    backend: Backend | None = None,
 ) -> None:
     """Record one kernel's executions for one task, then score them with both arms.
 
@@ -369,7 +370,10 @@ def run_task(
     part that cost hardware time and the scoring pass is free to re-run.
     """
     groups = Generator(task.domain, seed).generate(n_groups)
-    backend = NumpyBackend()
+    # Injected so the same driver records a corpus on either substrate. Defaults to
+    # NumPy: every CPU caller predates this parameter, and a device backend that
+    # silently became the default would make a CPU-only checkout fail at import.
+    backend = backend or NumpyBackend()
 
     results: list[ExecutionResult] = []
     for group in groups:
