@@ -17,7 +17,7 @@ import triton
 import triton.language as tl
 
 from autokernel_pbt.props.backends.triton_kernel import TritonKernel
-from kernels.triton.ladder import _launcher, block_for
+from kernels.triton.ladder import _launcher, _rows_grid, block_for
 
 #: log2(e). exp(x) == exp2(x * LOG2E) exactly in real arithmetic; in floating point
 #: the two differ in the last bits, which is the point.
@@ -58,29 +58,29 @@ def _softmax_reciprocal(x_ptr, y_ptr, n_cols, BLOCK: tl.constexpr):
 
 
 @triton.jit
-def _layernorm_sumsq(x_ptr, y_ptr, n_cols, EPS: tl.constexpr, BLOCK: tl.constexpr):
-    """Correct: variance as E[x^2] - E[x]^2 rather than E[(x - E[x])^2].
+def _layernorm_rsqrt(x_ptr, y_ptr, n_cols, EPS: tl.constexpr, BLOCK: tl.constexpr):
+    """Correct: multiplies by the reciprocal square root instead of dividing by sqrt.
 
-    Algebraically identical and famously less numerically stable -- the textbook
-    "computational formula" for variance. Exactly the kind of correct-but-different
-    kernel a false-positive rate needs to be measured against.
+    Hardware has a native rsqrt, so this is the form a performance-minded author
+    writes. Same two-pass variance as the reference -- only the final scaling differs,
+    which is exactly the "right but off in the last bits" case a false-positive rate
+    needs. Unlike the sum-of-squares formulation it does not lose significance.
     """
     row = tl.program_id(0)
     offs = tl.arange(0, BLOCK)
     mask = offs < n_cols
     x = tl.load(x_ptr + row * n_cols + offs, mask=mask, other=0.0)
     mean = tl.sum(x, axis=0) / n_cols
-    sq = tl.where(mask, x * x, 0.0)
-    var = tl.sum(sq, axis=0) / n_cols - mean * mean
     centered = tl.where(mask, x - mean, 0.0)
-    tl.store(y_ptr + row * n_cols + offs, centered / tl.sqrt(var + EPS), mask=mask)
+    var = tl.sum(centered * centered, axis=0) / n_cols
+    tl.store(y_ptr + row * n_cols + offs, centered * (1.0 / tl.sqrt(var + EPS)), mask=mask)
 
 
 _SOFTMAX_VARIANTS = {
     "softmax_exp2": _softmax_exp2,
     "softmax_reciprocal": _softmax_reciprocal,
 }
-_LAYERNORM_VARIANTS = {"layernorm_sumsq": _layernorm_sumsq}
+_LAYERNORM_VARIANTS = {"layernorm_rsqrt": _layernorm_rsqrt}
 
 VARIANTS = {**_SOFTMAX_VARIANTS, **_LAYERNORM_VARIANTS}
 
@@ -95,7 +95,7 @@ def correct_variant(name: str, n_cols: int) -> TritonKernel:
     return TritonKernel(
         kernel_id=name,
         jit_fn=jit_fn,
-        grid=lambda shape, ce: (shape[0],),
+        grid=_rows_grid,
         constexprs=constexprs,
         launcher=_launcher(jit_fn),
     )
@@ -104,5 +104,38 @@ def correct_variant(name: str, n_cols: int) -> TritonKernel:
 TASK_OF = {
     "softmax_exp2": "softmax",
     "softmax_reciprocal": "softmax",
-    "layernorm_sumsq": "layernorm",
+    "layernorm_rsqrt": "layernorm",
 }
+
+# --------------------------------------------------------------------------- #
+# Intended as a correct variant; the gate said otherwise.
+# --------------------------------------------------------------------------- #
+
+
+@triton.jit
+def _layernorm_sumsq(x_ptr, y_ptr, n_cols, EPS: tl.constexpr, BLOCK: tl.constexpr):
+    """Variance as E[x^2] - E[x]^2. Written as a correct variant, ADMITTED as a mutant.
+
+    Algebraically identical to the reference and a standard textbook optimization --
+    one pass instead of two. On device against a uniform(-10, 10) input it crosses the
+    correctness threshold, because the two terms are close in magnitude and their
+    difference loses most of its significant bits. Catastrophic cancellation is
+    textbook; that it is severe enough to be a *bug* at this scale was not predicted
+    here, and the gate is what caught it.
+
+    Kept deliberately. It is a defect an optimizing agent would plausibly introduce
+    while believing it was refactoring, which is the class of bug this corpus is for.
+    """
+    row = tl.program_id(0)
+    offs = tl.arange(0, BLOCK)
+    mask = offs < n_cols
+    x = tl.load(x_ptr + row * n_cols + offs, mask=mask, other=0.0)
+    mean = tl.sum(x, axis=0) / n_cols
+    sq = tl.where(mask, x * x, 0.0)
+    var = tl.sum(sq, axis=0) / n_cols - mean * mean
+    centered = tl.where(mask, x - mean, 0.0)
+    tl.store(y_ptr + row * n_cols + offs, centered / tl.sqrt(var + EPS), mask=mask)
+
+
+#: Not a variant. Verified broken by the admission gate; see the docstring above.
+FOUND_MUTANTS = {"layernorm_sumsq": _layernorm_sumsq}
