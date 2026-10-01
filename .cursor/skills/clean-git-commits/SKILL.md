@@ -46,13 +46,16 @@ scripts/git_commit_clean.sh -F /path/to/message.txt
 MSG=$(mktemp)
 git log -1 --format=%B | sed '/^Co-authored-by: Cursor/d' > "$MSG"
 TREE=$(git rev-parse HEAD^{tree})
-PARENT=$(git rev-parse HEAD^ 2>/dev/null || true)
+PARENT=$(git rev-parse --verify -q HEAD^ || true)   # empty on a root commit
 if [ -n "$PARENT" ]; then
   NEW=$(git commit-tree "$TREE" -p "$PARENT" -F "$MSG")
 else
   NEW=$(git commit-tree "$TREE" -F "$MSG")
 fi
-git reset --hard "$NEW"
+# --soft: the tree is identical, so only the branch pointer moves. --hard would
+# also discard any uncommitted work in the index and working tree.
+git reset --soft "$NEW"
+git branch --show-current   # must not be empty
 rm "$MSG"
 ```
 
