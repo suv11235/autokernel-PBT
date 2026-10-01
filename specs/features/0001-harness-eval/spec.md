@@ -6,7 +6,7 @@ Agent and test loops need a **single fixed entrypoint** that returns structured,
 
 ## Scope
 
-- CLI: `harness/bench.py` (or `python -m autokernel_pbt.harness.bench`)
+- CLI: `harness/bench.py` (or the `akpbt bench` console script)
 - Inputs: kernel module path, reference module path, config YAML
 - Outputs: `HarnessResult` JSON matching `specs/schemas/harness_result.schema.json`
 - Stages: compile → smoke → benchmark (correctness stages expanded in 0002)

@@ -1,20 +1,17 @@
 # Kernels
 
-Candidate and reference implementations. Each task directory should contain:
-
-- `reference.py` — PyTorch (or spec) baseline
-- `candidate.py` — optimized kernel under test
-- `README.md` — shapes, dtypes, operator name
+Kernels under test, per-task contracts, and the mutation corpus. NumPy references live in
+`src/autokernel_pbt/props/tasks.py`.
 
 ## Layout
 
 ```
 kernels/
-├── triton/          # Triton @triton.jit kernels
-├── cuda/            # CUDA extensions (future)
-└── tasks/           # per-operator folders (KernelBench-style, future)
+├── triton/ladder.py # stock Triton kernels for the ladder tasks
+├── mutants/         # blinded/grown mutation corpus + correct-but-different variants
+├── tasks/<task>/acceptance.yaml   # the declarative arm's contract per task
+└── cuda/            # CUDA extensions (future; empty)
 ```
 
-## Skeleton task
-
-See `triton/reference_relu.py` and `triton/candidate.py`.
+Mutant bodies are recorded verbatim from blinded authoring agents. Do not edit them — see
+`docs/protocol/mutant-authoring.md`.
