@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from autokernel_pbt.metrics.rates import arm_rates, rates_from_run
 from autokernel_pbt.props.scores import ArmScores
@@ -37,14 +38,22 @@ def test_tolerance_free_detection_has_its_own_numerator():
     "Bugs found without a tolerance argument" is the project's sharpest claim, so it
     cannot be inferred from the overall rate: a group failed only by a
     tolerance-bearing property must not count toward it.
+
+    The two PASS groups are what pin the *denominator*. With every group failed,
+    "over groups scored" and "over groups failed" are the same number, so a rate
+    divided by the wrong one -- turning "1 of 4 groups" into "1 of 2 detections" --
+    passed this test unchanged.
     """
     arm = ArmScores(arm="declarative", elapsed_s=0.0, results=[
         _r("free", Verdict.FAIL, "g0", tolerance_free=True),
         _r("ratio", Verdict.FAIL, "g1", tolerance_free=False),
+        _r("free", Verdict.PASS, "g2", tolerance_free=True),
+        _r("ratio", Verdict.PASS, "g3", tolerance_free=False),
     ])
     rates = arm_rates(arm)
-    assert rates.detection_rate == 1.0
-    assert rates.tolerance_free_detection_rate == 0.5
+    assert rates.groups_scored == 4
+    assert rates.detection_rate == 0.5
+    assert rates.tolerance_free_detection_rate == 0.25
 
 
 def test_a_group_failed_only_by_a_tolerance_bearing_property_is_excluded():
@@ -108,3 +117,23 @@ def test_rates_are_computed_from_the_tables_alone(tmp_path, repo_root):
     # rungs where an unnormalized softmax is genuinely correct.
     assert table["declarative"].detection_rate == 7 / 9
     assert table["declarative"].groups_scored == 9
+
+
+def test_a_result_with_no_group_id_is_refused():
+    """The case group is the unit, so a result that names none cannot be counted.
+
+    Oracle output is case-scoped -- the reference arm emits ``group_id=""`` on every
+    row -- and only the driver stamps the group. Fed unstamped results, ``_by_group``
+    once binned all of them into a single group named ``""``: nine groups of an
+    unnormalized softmax reported as ``groups_scored=1``, ``detection_rate=1.0``, a
+    plausible number about nothing.
+    """
+    arm = ArmScores(arm="reference", elapsed_s=0.0, results=[
+        _r("p", Verdict.FAIL, "g0"),
+        PropertyResult("reference_match", 1, False, Verdict.FAIL, case_id="softmax-g00001-base"),
+    ])
+    with pytest.raises(
+        ValueError,
+        match=r"result 'reference_match' for case 'softmax-g00001-base' carries no group_id; ",
+    ):
+        arm_rates(arm)
