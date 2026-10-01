@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import operator
 import warnings
 
 import numpy as np
@@ -10,6 +11,41 @@ from autokernel_pbt.props.case import BASE_RELATION, Case, CaseGroup
 from autokernel_pbt.props.domain import InputDomain, TensorSpec
 from autokernel_pbt.props.relations import RELATIONS, Relation
 from autokernel_pbt.props.spec import CaseSpec
+
+#: Seeds must fit one 32-bit word. The per-group stream is keyed by the list
+#: ``[seed, group_index]``, and numpy splits a wider int into several 32-bit words,
+#: so ``[2**32 + 5, 0]`` is the word list ``[5, 1, 0]`` -- and trailing zero words do
+#: not change a seed sequence, making it the same stream as ``[5, 1]``. Bounding the
+#: seed to one word makes (seed, index) -> stream injective again WITHOUT changing
+#: the key for any seed already in use, so every recorded run stays regenerable.
+SEED_BOUND = 2**32
+
+
+def _checked_seed(seed: object) -> int:
+    """The seed as a Python int in ``[0, SEED_BOUND)``, or a loud refusal.
+
+    ``operator.index`` accepts numpy integers (``rng.integers`` returns ``np.int64``,
+    which ``json`` cannot serialize into a ``CaseSpec``) and rejects floats. ``bool``
+    is refused separately because ``operator.index(True) == 1``: a flag in the seed
+    slot is a call-site mistake, and accepting it would record a run under a seed
+    nobody chose. The value, and therefore the stream, is unchanged by coercion.
+    """
+    if isinstance(seed, (bool, np.bool_)):
+        msg = f"seed must be an integer, not bool ({seed})"
+        raise TypeError(msg)
+    try:
+        value = operator.index(seed)
+    except TypeError:
+        msg = f"seed must be an integer, got {seed!r} ({type(seed).__name__})"
+        raise TypeError(msg) from None
+    if not 0 <= value < SEED_BOUND:
+        msg = (
+            f"seed must be in [0, 2**32), got {value}; the per-group stream is keyed by "
+            f"[seed, group_index], and a wider seed spills into the index's 32-bit word, "
+            f"so two different (seed, index) pairs would draw byte-identical groups"
+        )
+        raise ValueError(msg)
+    return value
 
 
 def _sample(spec: TensorSpec, shape: tuple[int, ...], rng: np.random.Generator) -> np.ndarray:
@@ -32,7 +68,7 @@ class Generator:
 
     def __init__(self, domain: InputDomain, seed: int) -> None:
         self.domain = domain
-        self.seed = seed
+        self.seed = _checked_seed(seed)
 
     def _relation(self, name: str) -> Relation:
         """Look up a relation, failing loudly on a typo rather than with a bare KeyError."""
@@ -68,14 +104,40 @@ class Generator:
     def generate(self, n_groups: int) -> list[CaseGroup]:
         """Generate ``n_groups`` case groups.
 
-        Stability boundary: group *i*'s bytes are a pure function of ``seed``,
-        ``i``, and the specs that group actually reads. They do not change when
-        ``n_groups`` changes, when an unrelated tensor is added to the domain, or
-        when ``relations`` is reordered -- so an expensive recorded corpus stays
-        reusable across those edits. They do change when ``seed``, ``i``, that
-        group's own tensor/relation specs, or ``shapes`` change. Editing
-        ``shapes`` remaps index -> shape, which is a visible semantic change to
-        what the domain means rather than an invisible value shift.
+        Stability boundary. Group *i* draws from its own stream,
+        ``default_rng([seed, i])``, and consumes it in one fixed order: every tensor
+        of ``domain.tensors`` in declaration order, then every relation of
+        ``relations`` in list order. That order decides what survives an edit:
+
+        * **The group count and other groups.** Group *i* is a pure function of
+          ``(seed, i, domain)``; ``generate(10)[:4]`` equals ``generate(4)``, and one
+          group can be rebuilt alone (``group_from_spec``).
+        * **Base tensors.** A base tensor depends on its own spec, its shape, and the
+          stream position the tensors declared *before* it left behind. Appending a
+          tensor, or any change to ``relations``, leaves every existing base tensor
+          byte-identical. Inserting a tensor ahead of it can shift it, and so can
+          changing the distribution of one declared before it: ``zeros``/``ones``
+          draw nothing, ``uniform`` one word per element, ``normal`` a
+          data-dependent number.
+        * **Relation partners are NOT stable under domain edits.** A partner is
+          derived from the base's values and draws from the stream after every base
+          tensor and after the relations listed before it. So it changes when a
+          drawing tensor (anything but ``zeros``/``ones``) is added *anywhere* --
+          appended included, even though the base it derives from is untouched --
+          when ``relations`` is reordered, or when a non-final relation is inserted
+          or dropped; and it can change when any tensor's distribution does. Only
+          appending or dropping a *trailing* relation leaves the earlier partners
+          intact.
+        * **Shapes.** Editing ``shapes`` remaps index -> shape, a visible change to
+          what the domain means rather than an invisible value shift.
+
+        An earlier version of this docstring also promised the partners were stable
+        under an added tensor or reordered relations. They are not, and the stream
+        was deliberately NOT re-derived to make them so: the GPU runs recorded at
+        seed 42 must stay byte-identically regenerable, and any change to how a
+        group's stream is derived or consumed would silently orphan all of them.
+        ``test_generator.py::test_the_recorded_corpus_is_regenerated_byte_for_byte``
+        pins that.
 
         Every group is built by ``group_from_spec``, never alongside it. Two code
         paths producing "the same" group is the drift that would make a regenerated
@@ -103,8 +165,11 @@ class Generator:
     def group_from_spec(self, spec: CaseSpec) -> CaseGroup:
         """Rebuild one case group from its recipe.
 
-        Byte-identical to the original, because the rng is a pure function of
-        ``(seed, group_index)`` and the transforms are applied in recorded order.
+        Byte-identical to the original under the same domain, because the rng is a
+        pure function of ``(seed, group_index)`` and the transforms are applied in
+        recorded order. The stream is keyed by ``spec.seed``, not ``self.seed``, so
+        the spec's seed is range-checked here too: a check in the constructor alone
+        would leave the wide-seed collision reachable through a spec.
 
         A spec with a *reduced* transform list rebuilds the same base case with fewer
         partners, which is the unit move a future shrinker makes. Note the base case
@@ -120,11 +185,14 @@ class Generator:
                 f"cannot join back to"
             )
             raise ValueError(msg)
+        _checked_seed(spec.seed)
         # One independent stream per group: group i's bytes depend only on
-        # (seed, i) and the specs it actually reads -- never on how many groups
-        # were requested, nor on unrelated tensors or relations. The list-key
-        # form is a pure function of (seed, index), so a single group can be
-        # regenerated standalone; rng.spawn() would force a walk of 0..i-1.
+        # (seed, i) and the domain -- never on how many groups were requested or on
+        # any other group. Which domain edits it survives is spelled out in
+        # `generate`. The list-key form is a pure function of (seed, index), so a
+        # single group can be regenerated standalone; rng.spawn() would force a walk
+        # of 0..i-1. DO NOT CHANGE THIS KEY OR THE DRAW ORDER BELOW: recorded runs
+        # are regenerated from exactly this stream.
         rng = np.random.default_rng([spec.seed, spec.group_index])
         group_id = f"{spec.task_id}-g{spec.group_index:05d}"
         base = Case(

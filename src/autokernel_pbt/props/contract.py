@@ -71,6 +71,46 @@ CONTRACT_VERSION = 1
 _REQUIRED_CRITERION_KEYS = ("id", "description", "check")
 
 
+class _DuplicateKeyError(ValueError):
+    """A mapping repeats a key. Re-raised by ``load_contract`` with the file's path."""
+
+
+class _UniqueKeySafeLoader(yaml.SafeLoader):
+    """``SafeLoader`` that refuses a repeated mapping key, at any depth.
+
+    Plain YAML loading keeps the *last* occurrence of a repeated key and drops the
+    rest without a word, so a second ``criteria:`` block erases every criterion in the
+    first, and a second ``property:`` under one ``check`` swaps the law a description
+    describes. Both parse to a perfectly valid document, which is why no check on the
+    parsed result can see them: the loss has to be caught while parsing.
+
+    ``construct_mapping`` runs for every mapping node, nested ones included. Merge
+    keys (``<<``) are skipped: an explicit key overriding a merged one is what a merge
+    is for, and only the node's own keys can be "written twice".
+    """
+
+    def construct_mapping(self, node: yaml.Node, deep: bool = False) -> dict[Any, Any]:
+        if isinstance(node, yaml.MappingNode):
+            seen: set[Any] = set()
+            for key_node, _ in node.value:
+                if key_node.tag == "tag:yaml.org,2002:merge":
+                    continue
+                key = self.construct_object(key_node, deep=deep)
+                try:
+                    repeated = key in seen
+                except TypeError:
+                    continue  # unhashable; the base constructor reports it
+                if repeated:
+                    msg = (
+                        f"repeats key {key!r} on line {key_node.start_mark.line + 1}; YAML "
+                        f"keeps only the last occurrence, so everything under the earlier "
+                        f"one would be dropped without a trace"
+                    )
+                    raise _DuplicateKeyError(msg)
+                seen.add(key)
+        return super().construct_mapping(node, deep=deep)
+
+
 class UnknownPropertyError(KeyError):
     """A contract names a property no registry provides.
 
@@ -206,9 +246,16 @@ def load_contract(path: Path | str) -> Contract:
     A repeated property is rejected too. It is not harmless duplication: every
     per-property tally the project reports counts ``PropertyResult`` rows, so a name
     listed twice inflates both halves of a rate nobody would think to distrust.
+
+    A repeated mapping *key* is rejected while parsing, at any depth (see
+    ``_UniqueKeySafeLoader``): YAML would keep the last occurrence and drop the rest,
+    so the checks below would never see what was lost.
     """
     path = Path(path)
-    document = yaml.safe_load(path.read_text())
+    try:
+        document = yaml.load(path.read_text(), Loader=_UniqueKeySafeLoader)
+    except _DuplicateKeyError as exc:
+        raise ValueError(f"contract {path} {exc}") from None
     if not isinstance(document, dict):
         msg = f"contract {path} is not a mapping; got {type(document).__name__}"
         raise ValueError(msg)
@@ -221,8 +268,11 @@ def load_contract(path: Path | str) -> Contract:
         )
         raise ValueError(msg)
 
+    # An exact type check, not just equality: ``True == 1`` and ``1.0 == 1``, so ``!=``
+    # alone accepts ``version: true`` (a typo) and ``version: 1.0`` (a minor revision
+    # this loader knows nothing about) as if they were the format it understands.
     version = document.get("version", CONTRACT_VERSION)
-    if version != CONTRACT_VERSION:
+    if type(version) is not int or version != CONTRACT_VERSION:
         msg = (
             f"contract {path} for task {task_id!r} declares version {version!r}; this "
             f"loader understands only version {CONTRACT_VERSION}, and parsing a future "

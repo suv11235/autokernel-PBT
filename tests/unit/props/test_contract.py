@@ -16,10 +16,12 @@ rejection is pinned here by a test that matches its own message.
 That last part is the invariant this suite is built to satisfy, and it is stronger
 than "every validation has a test": every validation is the *unique* catcher for at
 least one test. Verified by deleting each in turn and re-running this module — each
-of the thirteen (not-a-mapping, task_id, version, empty criteria, duplicate ids,
-duplicate property, missing criterion key, unknown check type, blank id, empty
-description, unknown property, deferral, one-contract-per-task) fails exactly its
-own case or cases and nothing else.
+of the fifteen (not-a-mapping, task_id, version, version's exact int type, empty
+criteria, duplicate ids, duplicate property, missing criterion key, unknown check
+type, blank id, empty description, unknown property, deferral,
+one-contract-per-task, duplicate YAML key) fails exactly its own case or cases and
+nothing else. The duplicate-key guard is pinned at two depths, because a guard on the
+top-level mapping alone passes the first test and not the second.
 
 Two of those guards are also pinned against a specific *ordering* regression rather
 than only against deletion. ``id`` and ``description`` are type-checked before they
@@ -41,6 +43,7 @@ the detection disappear.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -531,3 +534,76 @@ def test_a_property_named_twice_is_rejected(tmp_path: Path):
 def test_a_contract_file_that_is_not_a_mapping_is_rejected(tmp_path: Path):
     with pytest.raises(ValueError, match="is not a mapping"):
         load_contract(_write(tmp_path / "acceptance.yaml", [_criterion(OutputsAreFinite.name)]))
+
+
+# --------------------------------------------------------------------------- #
+# Duplicate keys: the defect YAML itself hides
+# --------------------------------------------------------------------------- #
+
+
+def _raw_contract(tmp_path: Path, text: str) -> Path:
+    """Write YAML text verbatim. ``yaml.safe_dump`` cannot emit a repeated key at all,
+    which is exactly why a dict-built fixture can never exercise this guard."""
+    path = tmp_path / "acceptance.yaml"
+    path.write_text(text)
+    return path
+
+
+def test_a_repeated_top_level_key_is_rejected(tmp_path: Path):
+    """Two ``criteria:`` blocks: YAML keeps the last and drops the first without a word.
+
+    Measured before the guard: the file below loaded cleanly as a two-criterion
+    contract, ``rows_sum_to_one`` was gone, and an unnormalized softmax was caught on
+    0 of 9 groups. A parser-level loss is invisible to every check that runs on the
+    parsed document, so it has to be caught while parsing.
+    """
+    path = _raw_contract(
+        tmp_path,
+        "task_id: softmax\n"
+        "version: 1\n"
+        "criteria:\n"
+        f"  - {{id: FINITE, description: finite, check: {{type: property, property: "
+        f"{OutputsAreFinite.name}}}}}\n"
+        f"  - {{id: SUMS, description: rows sum to one, check: {{type: property, property: "
+        f"{RowsSumToOne.name}}}}}\n"
+        "criteria:\n"
+        f"  - {{id: FINITE, description: finite, check: {{type: property, property: "
+        f"{OutputsAreFinite.name}}}}}\n",
+    )
+    with pytest.raises(ValueError, match=r"repeats key 'criteria' on line 6;"):
+        load_contract(path)
+
+
+def test_a_repeated_nested_key_is_rejected(tmp_path: Path):
+    """The same loss one mapping down: the first ``property:`` under ``check`` vanishes.
+
+    A guard on the top-level mapping alone would pass the test above and accept this
+    one, which silently swaps the law a criterion's description describes.
+    """
+    path = _raw_contract(
+        tmp_path,
+        "task_id: softmax\n"
+        "version: 1\n"
+        "criteria:\n"
+        "  - id: FINITE\n"
+        "    description: no output element is NaN or Inf\n"
+        "    check:\n"
+        "      type: property\n"
+        f"      property: {OutputsAreFinite.name}\n"
+        f"      property: {ValuesInUnitInterval.name}\n",
+    )
+    with pytest.raises(ValueError, match=r"repeats key 'property' on line 9;"):
+        load_contract(path)
+
+
+@pytest.mark.parametrize(("version", "shown"), [(True, "True"), (1.0, "1.0")])
+def test_a_version_that_merely_equals_one_is_rejected(tmp_path: Path, version: Any, shown: str):
+    """``True == 1`` and ``1.0 == 1`` in Python, so an equality check accepts both.
+
+    Neither is the integer format version this loader understands: ``version: true``
+    is a typo, and ``version: 1.0`` reads as a minor revision the loader knows nothing
+    about. Accepting them is the same promise ``version:`` exists to refuse to make.
+    """
+    path = _contract_file(tmp_path, [OutputsAreFinite.name], version=version)
+    with pytest.raises(ValueError, match=rf"declares version {re.escape(shown)}; "):
+        load_contract(path)

@@ -145,3 +145,22 @@ def test_tensor_spec_allows_low_equals_high():
     )
     assert spec.low == 3.0
     assert spec.high == 3.0
+
+
+def test_domain_rejects_duplicate_tensor_names():
+    """Tensors are keyed by name, so a second ``x`` silently replaces the first.
+
+    Measured before the guard: a domain declaring ``x`` as float64 and then as float32
+    generated cases whose only tensor was the float32 ``x`` while ``Case.dtype`` --
+    read from the FIRST spec -- reported float64. Every consumer of ``Case.dtype``
+    would then be told the wrong dtype about the tensor it was handed.
+    """
+    with pytest.raises(
+        ValueError,
+        match=r"^domain 't' declares tensor name\(s\) \['x'\] more than once; ",
+    ):
+        InputDomain(
+            task_id="t",
+            tensors=(TensorSpec(name="x", dtype="float64"), TensorSpec(name="x", dtype="float32")),
+            shapes=((2, 3),),
+        )
