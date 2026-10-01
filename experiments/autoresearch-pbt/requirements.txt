@@ -1,0 +1,7 @@
+# The loop's own environment, kept apart from the project venv on purpose: the
+# project pins numpy<2 for torch interop, and NumPy 1.x wheels link OpenBLAS on
+# macOS rather than Accelerate, which runs this loop ~6x slower and so changes
+# every val_bpb under a wall-clock budget. The recorded ledger was measured on
+# NumPy 2.5 / Accelerate. autokernel_pbt is imported from ../../src, not installed.
+numpy>=2
+pyyaml>=6.0
