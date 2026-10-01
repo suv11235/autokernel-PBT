@@ -1,6 +1,7 @@
 """Verdict semantics tests."""
 
 import json
+import re
 
 import pytest
 
@@ -117,6 +118,29 @@ def test_verdict_json_serializable():
     data = {"result": Verdict.PASS}
     serialized = json.dumps(data)
     assert serialized == '{"result": "pass"}'
+
+
+@pytest.mark.parametrize("member", list(Verdict))
+def test_a_wire_string_verdict_is_coerced_to_the_enum_member(member):
+    """A bare ``"fail"`` compares equal to ``Verdict.FAIL`` but is not identical to it.
+
+    ``summarize`` dispatches on identity, so an uncoerced wire string slipped past
+    both of its checks and fell through to PASS: ``verdict="fail"`` summarized as a
+    pass and ``verdict="inconclusive"`` as a pass too. Parquet, JSON and any caller
+    building results by hand all hand back the wire value. Coercing at construction
+    fixes every identity consumer at once (``metrics.rates`` uses ``is`` as well),
+    rather than patching them one comparison at a time.
+    """
+    result = PropertyResult(property_name="p", tier=1, tolerance_free=True, verdict=member.value)
+    assert result.verdict is member
+
+
+def test_an_unknown_verdict_is_rejected_at_construction():
+    # A coercion that let an unknown value through would leave summarize reading it
+    # as neither FAIL nor INCONCLUSIVE -- a PASS, from a verdict that names nothing.
+    expected = "verdict must be one of ['pass', 'fail', 'inconclusive'], got 'skipped'"
+    with pytest.raises(ValueError, match=re.escape(expected)):
+        PropertyResult(property_name="p", tier=1, tolerance_free=True, verdict="skipped")
 
 
 def test_property_result_accepts_tier_1():

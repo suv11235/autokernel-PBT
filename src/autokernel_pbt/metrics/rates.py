@@ -44,8 +44,19 @@ def _by_group(results: list[PropertyResult]) -> dict[str, list[PropertyResult]]:
     groups: dict[str, list[PropertyResult]] = {}
     for result in results:
         # Every persisted score row carries a group_id; `ScoreTable` refuses one
-        # without. Reading it directly rather than falling back keeps a malformed
-        # table loud instead of silently mis-binned.
+        # without. Oracle output does not: the reference arm is case-scoped and
+        # emits group_id="" on every row, and only the driver stamps the group. A
+        # missing id is refused here rather than used as a key, because "" is a
+        # perfectly good dict key -- every unstamped result would land in one group
+        # and the rate would be computed over a single fictitious group.
+        if not result.group_id:
+            msg = (
+                f"result {result.property_name!r} for case {result.case_id!r} carries no "
+                f"group_id; rates are keyed by case group, so an unstamped result cannot "
+                f"be counted. Read persisted scores (driver.read_run), which always carry "
+                f"one, rather than raw oracle output"
+            )
+            raise ValueError(msg)
         groups.setdefault(result.group_id, []).append(result)
     return groups
 
@@ -82,6 +93,9 @@ def rates_from_run(run_dir: Path | str) -> dict[str, ArmRates]:
     about the same corpus. Reading `scores.parquet` directly would happily compute a
     rate from another run's verdicts, since case ids are a pure function of
     (seed, index) and would join perfectly.
+
+    A run that was recorded but not yet scored answers ``{}``, because ``read_run``
+    treats that as a valid state; ``report.render`` is what refuses to publish it.
     """
     from autokernel_pbt.props.driver import read_run
 

@@ -86,6 +86,18 @@ class InputDomain:
             raise ValueError("domain needs at least one shape")
         if not self.tensors:
             raise ValueError("domain needs at least one tensor spec")
+        # A case's tensors are a dict keyed by name, so a repeated name keeps only the
+        # last spec's array while `Case.dtype` is read from the FIRST spec: the case
+        # would describe one tensor and carry another.
+        names = [t.name for t in self.tensors]
+        repeated = sorted({name for name in names if names.count(name) > 1})
+        if repeated:
+            msg = (
+                f"domain {self.task_id!r} declares tensor name(s) {repeated} more than "
+                f"once; tensors are keyed by name, so the later spec would silently "
+                f"replace the earlier one"
+            )
+            raise ValueError(msg)
 
     def to_dict(self) -> dict[str, Any]:
         return {

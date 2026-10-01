@@ -1,5 +1,7 @@
 """Test-ratio tolerance tests."""
 
+import re
+
 import numpy as np
 import pytest
 
@@ -217,6 +219,47 @@ def test_exact_dtype_is_rejected_even_when_the_shapes_also_mismatch():
         residual_ratio(np.array([1, 2, 3]), np.array([1, 2]))
 
 
+def _complex_message(side: str, dtype: str) -> str:
+    return re.escape(
+        f"{side} is complex (dtype('{dtype}')); a test ratio is a real-valued norm, and "
+        f"casting to float64 would discard the imaginary part, so it is undefined here"
+    )
+
+
+def test_a_complex_candidate_is_rejected_rather_than_truncated_to_its_real_part():
+    """Casting complex to float64 keeps the real part and throws the rest away.
+
+    The candidate below disagrees with the reference by 5 and 7 in the imaginary part
+    and agrees exactly in the real part, so a truncating cast scores it 0.0 — a PASS
+    on a wildly wrong output in production, and a ComplexWarning-turned-error under
+    this project's test config. An explicit real ``dtype`` must not wave it through:
+    the rounding budget says nothing about whether the *values* are real, and
+    ``ShiftInvariance`` passes the base's dtype for a partner that may differ.
+    """
+    cand = np.array([1 + 5j, 2 - 7j], dtype=np.complex64)
+    ref = np.array([1.0, 2.0], dtype=np.float32)
+    with pytest.raises(ExactDtypeError, match=_complex_message("candidate", "complex64")):
+        residual_ratio(cand, ref, dtype=np.float32)
+
+
+def test_a_complex_reference_is_rejected_rather_than_truncated_to_its_real_part():
+    # The reference arm passes dtype=got.dtype, so a real kernel output against a
+    # complex reference resolves a perfectly good eps — the reference's own kind is
+    # the only thing left that can refuse it.
+    cand = np.array([1.0, 2.0], dtype=np.float32)
+    ref = cand + np.complex64(5j)
+    with pytest.raises(ExactDtypeError, match=_complex_message("reference", "complex64")):
+        residual_ratio(cand, ref)
+
+
+def test_a_complex_rounding_dtype_is_rejected():
+    # finfo(complex64).eps exists (it is float32's), which is exactly why "fc" let a
+    # complex dtype through as if it had a real rounding budget.
+    x = np.array([1.0, 2.0], dtype=np.float32)
+    with pytest.raises(ExactDtypeError, match=_complex_message("the rounding dtype", "complex64")):
+        residual_ratio(x, x, dtype=np.complex64)
+
+
 def test_exact_dtype_error_is_narrower_than_value_error():
     # Task 11 catches this specifically; a bare `except ValueError` there would
     # swallow the n-validation error too and deflate the detection denominator.
@@ -247,6 +290,20 @@ def test_empty_arrays_are_not_a_pass():
     assert not within_threshold(residual_ratio(empty, empty))
     # A zero dimension anywhere, not just a 1-D empty.
     assert np.isnan(residual_ratio(np.zeros((4, 0)), np.zeros((4, 0))))
+
+
+def test_a_subnormal_reference_does_not_divide_by_zero():
+    """``scale * eps`` underflows to 0.0 for a float64 reference near 1e-310.
+
+    Python float division then raises ZeroDivisionError and aborts the scoring pass
+    on data that is finite and merely tiny. Dividing by the scale first keeps every
+    intermediate representable: residual/scale is a plain relative error.
+    """
+    tiny = np.array([1e-310, 2e-310])
+    assert float(np.max(np.abs(tiny))) * EPS64 == 0.0, "the construction must underflow"
+    assert residual_ratio(tiny, tiny) == 0.0
+    # residual 1e-310 over scale 2e-310 is 0.5, in units of eps; n=2 floors to 1.0.
+    assert residual_ratio(tiny * 1.5, tiny) == pytest.approx(0.5 / EPS64, rel=1e-9)
 
 
 def test_huge_values_do_not_warn_on_overflow():

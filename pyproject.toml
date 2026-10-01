@@ -38,6 +38,13 @@ akpbt = "autokernel_pbt.cli.main:main"
 [tool.hatch.build.targets.wheel]
 packages = ["src/autokernel_pbt"]
 
+# specs/schemas/ is the single source of truth for the JSON schemas, and it sits
+# outside the package, so a wheel would ship without it and every `validate` in an
+# installed copy would fail. Copied in at build time only; `autokernel_pbt.schema`
+# reads this copy when present and falls back to the repo for editable installs.
+[tool.hatch.build.targets.wheel.force-include]
+"specs/schemas" = "autokernel_pbt/schemas"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src", "."]

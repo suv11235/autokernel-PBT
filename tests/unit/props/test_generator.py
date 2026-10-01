@@ -1,5 +1,7 @@
 """Generator determinism and coverage tests."""
 
+import hashlib
+import json
 import warnings
 
 import numpy as np
@@ -7,6 +9,8 @@ import pytest
 
 from autokernel_pbt.props.domain import InputDomain, TensorSpec
 from autokernel_pbt.props.generator import Generator
+from autokernel_pbt.props.spec import CaseSpec
+from autokernel_pbt.props.tasks import TASKS
 
 DOMAIN = InputDomain(
     task_id="softmax",
@@ -212,3 +216,126 @@ def test_relation_shape_mismatch_raises_clear_value_error():
     with pytest.raises(ValueError, match="shift_rows") as excinfo:
         Generator(domain, seed=0).generate(1)
     assert "2-D" in str(excinfo.value)
+
+
+# --------------------------------------------------------------------------- #
+# The seed: what it may be, and the corpus it must keep reproducing
+# --------------------------------------------------------------------------- #
+
+
+def _corpus_digest(groups) -> str:
+    """One hash over every case id, tensor name, dtype, shape and byte of a corpus."""
+    digest = hashlib.sha256()
+    for group in groups:
+        for case in group.cases:
+            for name in sorted(case.tensors):
+                tensor = case.tensors[name]
+                digest.update(f"{case.case_id}|{name}|{tensor.dtype}|{tensor.shape}|".encode())
+                digest.update(tensor.tobytes())
+    return digest.hexdigest()
+
+
+#: Digests of each task's full ladder at seed 42 -- the seed every recorded GPU run
+#: was generated with, and each run recorded exactly ``len(shapes)`` groups. Computed
+#: from the generator as it stood when those runs were recorded.
+RECORDED_SEED = 42
+RECORDED_CORPUS_DIGESTS = {
+    "layernorm": "9f6a348b38be1f55364aef56d7bd3c9fc0a22025a57784675d34b45eec475565",
+    "relu": "c04878e2064a71450ecee50588295a44e8afebd02cb80fe15cbc5e88041df97d",
+    "softmax": "b07f3234693364a6ed79617897bb71bb2b8a554b3d276e20c81b867e68ca612e",
+    "softmax_at_scale": "0c7a23e9c9ca074097cf88c4fad419b2cbc716812199ee824e6db3deda7f9146",
+    "tolerance_sweep": "fd87daeb7b7baa300c3b385ad798d74d90cec52c503887276859676c38d21ba5",
+}
+
+
+def test_the_recorded_corpus_is_regenerated_byte_for_byte():
+    """The guarantee the stability docstring exists to protect, pinned directly.
+
+    A recorded run is reusable only while its inputs can be regenerated from its seed;
+    paid-for hardware time is stored against case ids that mean these bytes. Any
+    change to how a group's stream is derived or consumed -- per-tensor substreams,
+    a different key, a reordered draw -- changes a digest here, and must not land
+    without a decision to orphan every recorded run. So must a domain edit in
+    ``tasks.py`` or a numpy whose distributions draw differently.
+    """
+    assert set(RECORDED_CORPUS_DIGESTS) == set(TASKS)
+    for task_id, task in TASKS.items():
+        groups = Generator(task.domain, seed=RECORDED_SEED).generate(len(task.domain.shapes))
+        assert _corpus_digest(groups) == RECORDED_CORPUS_DIGESTS[task_id], task_id
+
+
+def test_a_numpy_integer_seed_is_stored_as_a_python_int():
+    """``rng.integers(...)`` returns ``np.int64``, which ``json`` cannot serialize.
+
+    Measured before the coercion: ``run_task`` with such a seed executed 18 kernel
+    launches and then died persisting the very first ``CaseSpec`` -- the failure
+    landing after the paid-for work, in a path far from the mistake. Coercion must not
+    change the stream, so the bytes are compared against the plain-int seed too.
+    """
+    generator = Generator(DOMAIN, seed=np.int64(7))
+    assert type(generator.seed) is int
+    groups = generator.generate(3)
+    assert all(type(group.spec.seed) is int for group in groups)
+    json.dumps([group.spec.to_dict() for group in groups])
+    assert _corpus_digest(groups) == _corpus_digest(Generator(DOMAIN, seed=7).generate(3))
+
+
+@pytest.mark.parametrize("seed", [True, False, np.True_])
+def test_a_bool_seed_is_rejected(seed):
+    """``operator.index(True) == 1``, so a stray flag would seed a real corpus.
+
+    A bool in the seed slot is a call-site mistake (a flag passed positionally, say)
+    and never a deliberate seed of 0 or 1; accepting it would record a run under a
+    seed nobody chose. ``np.bool_`` is named separately: on numpy 1.x
+    ``operator.index`` still accepts it, with only a DeprecationWarning.
+    """
+    with pytest.raises(TypeError, match=rf"^seed must be an integer, not bool \({seed}\)$"):
+        Generator(DOMAIN, seed=seed)
+
+
+def test_a_non_integer_seed_is_rejected():
+    with pytest.raises(TypeError, match=r"^seed must be an integer, got 1\.5 \(float\)$"):
+        Generator(DOMAIN, seed=1.5)
+
+
+def test_the_stream_key_collides_for_seeds_wider_than_32_bits():
+    """Why the range check below exists: numpy splits wide ints into 32-bit words.
+
+    ``[2**32 + 5, 0]`` becomes the words ``[5, 1, 0]``, and trailing zero words do not
+    change the seed sequence, so it is the same stream as ``[5, 1]`` -- group 0 of one
+    seed is byte-identical to group 1 of another.
+    """
+    assert np.random.default_rng([5, 1]).random(4).tobytes() == (
+        np.random.default_rng([2**32 + 5, 0]).random(4).tobytes()
+    )
+
+
+_SEED_RANGE = r"seed must be in \[0, 2\*\*32\), got {seed}; "
+
+
+@pytest.mark.parametrize("seed", [-1, 2**32, 2**32 + 5])
+def test_a_seed_outside_32_bits_is_rejected(seed):
+    with pytest.raises(ValueError, match="^" + _SEED_RANGE.format(seed=seed)):
+        Generator(DOMAIN, seed=seed)
+
+
+@pytest.mark.parametrize("seed", [0, 2**32 - 1])
+def test_the_32_bit_boundaries_are_accepted(seed):
+    assert Generator(DOMAIN, seed=seed).generate(3)
+
+
+def test_a_spec_seed_outside_32_bits_is_rejected():
+    """``group_from_spec`` keys the stream by the SPEC's seed, not the generator's.
+
+    So a range check in the constructor alone leaves the collision reachable: before
+    this guard, this spec rebuilt group 0 byte-identical to group 1 of seed 5.
+    """
+    domain = InputDomain(
+        task_id="t", tensors=(TensorSpec("x", "float32"),), shapes=((4, 4),),
+        relations=("shift_rows",),
+    )
+    spec = CaseSpec(
+        seed=2**32 + 5, task_id="t", group_index=0, shape=(4, 4), transforms=("shift_rows",)
+    )
+    with pytest.raises(ValueError, match="^" + _SEED_RANGE.format(seed=2**32 + 5)):
+        Generator(domain, seed=0).group_from_spec(spec)

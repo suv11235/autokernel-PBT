@@ -1,13 +1,20 @@
 """ExecutionTable round-trip tests."""
 
+import itertools
+import re
+import shutil
+
 import numpy as np
 import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 import pytest
+from safetensors import safe_open
+from safetensors.numpy import load_file, save_file
 
 from autokernel_pbt.props.backends.base import ExecutionResult, Status
 from autokernel_pbt.props.case import Case
-from autokernel_pbt.props.table import SCHEMA, ExecutionTable, _conform
+from autokernel_pbt.props.table import SCHEMA, ExecutionTable, _conform, payload_filename
 
 
 def _result(case_id: str, group_id: str = "g0", relation: str = "base") -> ExecutionResult:
@@ -737,3 +744,340 @@ def test_a_row_with_no_spec_round_trips_as_none(tmp_path):
     # else entirely. "" on disk must come back as None, not as an empty CaseSpec.
     ExecutionTable(tmp_path / "run1").write([_result("c0")])
     assert ExecutionTable(tmp_path / "run1").read()[0].case_spec is None
+
+
+def test_one_read_returns_the_rows_and_the_fingerprint_they_carry(tmp_path):
+    """The pair a consumer stamps or compares must come from the read it scored.
+
+    A fingerprint fetched by a *second* read describes whatever is on disk by then,
+    which is the corpus a concurrent re-record left -- not the one in hand.
+    """
+    run = tmp_path / "run"
+    ExecutionTable(run).write([_result("c0"), _result("c1", relation="shift_rows")])
+
+    rows, fingerprint = ExecutionTable(run).read_with_fingerprint()
+    groups, grouped_fingerprint = ExecutionTable(run).read_groups_with_fingerprint()
+
+    assert [r.case.case_id for r in rows] == ["c0", "c1"]
+    assert {gid: [r.case.case_id for r in rs] for gid, rs in groups.items()} == {"g0": ["c0", "c1"]}
+    assert fingerprint == grouped_fingerprint == ExecutionTable(run).corpus_fingerprint()
+    assert ExecutionTable(tmp_path / "nope").read_with_fingerprint() == ([], "")
+
+
+def test_the_paired_read_opens_the_index_once(tmp_path, monkeypatch):
+    """"From one read" is the whole contract, so it is asserted directly.
+
+    A version that returned `self.read()` beside `self.corpus_fingerprint()` would have
+    the right signature and the original defect: two reads of `rows.parquet`, between
+    which a re-record lands unseen.
+    """
+    run = tmp_path / "run"
+    ExecutionTable(run).write([_result("c0")])
+    original = pq.read_table
+    opened: list[str] = []
+
+    def read_table(source, *args, **kwargs):
+        opened.append(str(source))
+        return original(source, *args, **kwargs)
+
+    monkeypatch.setattr(pq, "read_table", read_table)
+    ExecutionTable(run).read_with_fingerprint()
+    assert opened == [str(run / "rows.parquet")]
+
+
+# --- Payload identity: a payload names the corpus it belongs to -----------------
+
+#: What the build before payload stamping wrote: a bare sha256 hexdigest over a
+#: uuid that was never stored, so its case-id half cannot be recomputed by anyone.
+LEGACY_FINGERPRINT = "ab" * 32
+
+
+def _payload_metadata(path) -> dict | None:
+    with safe_open(str(path), framework="np") as handle:
+        return handle.metadata()
+
+
+def _patch_rows(run, transform) -> None:
+    table = pq.read_table(run / "rows.parquet")
+    pq.write_table(transform(table), run / "rows.parquet")
+
+
+def _with_fingerprint(value: str):
+    def transform(table: pa.Table) -> pa.Table:
+        return table.set_column(
+            table.schema.get_field_index("corpus_fingerprint"),
+            "corpus_fingerprint",
+            pa.array([value] * table.num_rows, type=pa.string()),
+        )
+
+    return transform
+
+
+def _as_legacy(run) -> None:
+    """Rewrite a freshly written run the way the pre-stamping build laid it out.
+
+    Verbatim case ids as filenames, no safetensors metadata, and a bare 64-hex
+    fingerprint. The five recorded GPU runs have exactly this shape, and they are
+    the corpus the project cannot re-record, so the reader must keep accepting it.
+    """
+    _patch_rows(run, _with_fingerprint(LEGACY_FINGERPRINT))
+    for case_id in pq.read_table(run / "rows.parquet").column("case_id").to_pylist():
+        encoded = run / "tensors" / payload_filename(case_id)
+        tensors = load_file(str(encoded))
+        encoded.unlink()
+        save_file(tensors, str(run / "tensors" / f"{case_id}.safetensors"))
+
+
+def _strip_payload_metadata(run) -> None:
+    for path in (run / "tensors").iterdir():
+        save_file(load_file(str(path)), str(path))
+
+
+def test_every_payload_is_stamped_with_its_corpus_fingerprint(tmp_path):
+    run = tmp_path / "run"
+    ExecutionTable(run).write([_result("c0"), _result("c1")])
+    fingerprint = ExecutionTable(run).corpus_fingerprint()
+
+    stamps = [_payload_metadata(path) for path in sorted((run / "tensors").iterdir())]
+    assert stamps == [{"corpus_fingerprint": fingerprint}] * 2
+
+
+def test_payloads_from_another_write_are_refused(tmp_path):
+    """A v1 index beside v2 payloads -- a partial scp of a run dir, or a write landing
+    between the index read and the payload reads -- read clean before payloads were
+    stamped: v1 telemetry paired with v2 tensor bytes, and nothing said so.
+    """
+    a, b = tmp_path / "a", tmp_path / "b"
+    ExecutionTable(a).write([_tagged("c0", 1.0), _tagged("c1", 1.0)])
+    ExecutionTable(b).write([_tagged("c0", 2.0), _tagged("c1", 2.0)])
+    indexed, foreign = ExecutionTable(a).corpus_fingerprint(), ExecutionTable(b).corpus_fingerprint()
+    shutil.rmtree(a / "tensors")
+    shutil.copytree(b / "tensors", a / "tensors")
+
+    with pytest.raises(
+        ValueError,
+        match=rf"^payload \S+/c0\.safetensors belongs to corpus {foreign}, but "
+        rf"\S+/rows\.parquet indexes corpus {indexed}",
+    ):
+        ExecutionTable(a).read()
+
+
+def test_a_legacy_index_beside_stamped_payloads_is_refused(tmp_path):
+    """The scp case the stamp exists for: an old run's `rows.parquet` left beside a
+    newer recording's `tensors/`. The index cannot vouch for itself, but every
+    stamped payload can still say it belongs to a different corpus."""
+    a, b = tmp_path / "a", tmp_path / "b"
+    ExecutionTable(a).write([_tagged("c0", 1.0)])
+    _as_legacy(a)
+    ExecutionTable(b).write([_tagged("c0", 2.0)])
+    foreign = ExecutionTable(b).corpus_fingerprint()
+    shutil.rmtree(a / "tensors")
+    shutil.copytree(b / "tensors", a / "tensors")
+
+    with pytest.raises(
+        ValueError, match=rf"belongs to corpus {foreign}, but \S+ indexes corpus {LEGACY_FINGERPRINT}"
+    ):
+        ExecutionTable(a).read()
+
+
+def test_a_stamped_index_beside_unstamped_payloads_is_refused(tmp_path):
+    """Only a legacy index excuses a payload with no stamp.
+
+    Every payload a stamping build writes carries one, so an unstamped payload under a
+    stamped index is not legacy data -- it is a payload from some other write.
+    """
+    run = tmp_path / "run"
+    ExecutionTable(run).write([_tagged("c0", 1.0)])
+    _strip_payload_metadata(run)
+
+    with pytest.raises(
+        ValueError, match=r"^payload \S+/c0\.safetensors carries no corpus fingerprint, but"
+    ):
+        ExecutionTable(run).read()
+
+
+def test_a_legacy_run_still_reads(tmp_path):
+    """Unstamped payloads under verbatim names, beneath a legacy index, read as before.
+
+    `::` ids are the case that needs the verbatim-name fallback: their encoded name
+    differs from the name the old build wrote. Base ids encode to themselves.
+    """
+    run = tmp_path / "run"
+    ids = ["softmax-g00000-base", "softmax-g00000-base::shift_rows"]
+    ExecutionTable(run).write([_tagged(ids[0], 1.0), _tagged(ids[1], 2.0)])
+    _as_legacy(run)
+    assert sorted(p.name for p in (run / "tensors").iterdir()) == [f"{i}.safetensors" for i in ids]
+
+    assert _observed(run) == [(ids[0], 1.0, 1.0), (ids[1], 2.0, 2.0)]
+    assert ExecutionTable(run).corpus_fingerprint() == LEGACY_FINGERPRINT
+
+
+def test_the_verbatim_name_fallback_is_for_legacy_tables_only(tmp_path):
+    """A stamping build never writes a verbatim name, so under its index one is a stray.
+
+    And a stray can be worse than foreign: on a case-insensitive filesystem the
+    verbatim `Case-0.safetensors` *is* `case-0.safetensors`, another row of the same
+    corpus, whose stamp matches. Copying the encoded file to the verbatim name is the
+    filesystem-independent form of that: a payload the stamp cannot tell apart.
+    """
+    run = tmp_path / "run"
+    ExecutionTable(run).write([_tagged("a::b", 1.0)])
+    encoded = run / "tensors" / payload_filename("a::b")
+    shutil.copy(encoded, run / "tensors" / "a::b.safetensors")
+    encoded.unlink()
+
+    with pytest.raises(FileNotFoundError):
+        ExecutionTable(run).read()
+
+
+def test_the_legacy_fallback_never_leaves_the_tensor_dir(tmp_path):
+    """The pre-encoding build wrote `../outside` *outside* `tensors/`; the reader must
+    not follow an index there, or a crafted `rows.parquet` names any file on disk."""
+    run = tmp_path / "run"
+    ExecutionTable(run).write([_tagged("../outside", 1.0)])
+    _as_legacy(run)
+    assert (run / "outside.safetensors").exists()
+
+    with pytest.raises(FileNotFoundError, match=re.escape(payload_filename("../outside"))):
+        ExecutionTable(run).read()
+
+
+# --- Payload filenames: injective, portable, case-fold-safe ---------------------
+
+#: Characters at least one target filesystem refuses, or that sync clients rewrite.
+#: OneDrive renamed every `...::shift_rows.safetensors` to `..._shift_rows`, making
+#: those runs unreadable.
+_UNPORTABLE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+_WINDOWS_RESERVED = {"con", "prn", "aux", "nul", *(f"com{i}" for i in range(10)), *(f"lpt{i}" for i in range(10))}
+
+
+def test_case_ids_differing_only_in_case_get_distinct_payloads(tmp_path):
+    """macOS's default filesystem is case-insensitive: `Case-0` and `case-0` passed the
+    duplicate guard as strings and then shared one file, both rows reading the
+    survivor's bytes under their own metadata."""
+    run = tmp_path / "run"
+    ExecutionTable(run).write([_tagged("Case-0", 1.0), _tagged("case-0", 2.0)])
+
+    names = [p.name for p in (run / "tensors").iterdir()]
+    assert len({name.casefold() for name in names}) == 2, names
+    assert _observed(run) == [("Case-0", 1.0, 1.0), ("case-0", 2.0, 2.0)]
+
+
+def test_case_ids_with_path_separators_stay_inside_the_tensor_dir(tmp_path):
+    run = tmp_path / "run"
+    ids = ["../escaped", "a/b", "a\\b", "/abs"]
+    ExecutionTable(run).write([_tagged(case_id, float(i)) for i, case_id in enumerate(ids)])
+
+    assert {p.name for p in run.iterdir()} == {"rows.parquet", "tensors"}
+    assert all(p.is_file() for p in (run / "tensors").iterdir())
+    assert _observed(run) == [(case_id, float(i), float(i)) for i, case_id in enumerate(ids)]
+
+
+def test_payload_names_are_portable(tmp_path):
+    """No character a target filesystem refuses, no hidden or dot-only name, and no
+    Windows device name -- `con.safetensors` is unopenable there, extension or not."""
+    run = tmp_path / "run"
+    ids = ["softmax-g00000-base::shift_rows", "con", "AUX.x", ".", "..", ".hidden", 'q?"<>|*', "b\\c"]
+    ExecutionTable(run).write([_tagged(case_id, float(i)) for i, case_id in enumerate(ids)])
+
+    for path in (run / "tensors").iterdir():
+        assert not _UNPORTABLE.search(path.name), path.name
+        assert not path.name.startswith("."), path.name
+        assert path.name.split(".")[0].casefold() not in _WINDOWS_RESERVED, path.name
+    assert _observed(run) == [(case_id, float(i), float(i)) for i, case_id in enumerate(ids)]
+
+
+def test_payload_filename_is_injective_and_case_fold_safe():
+    """Exhaustive over every id of length <= 3 drawn from the characters that break a
+    naive escape: the escape character itself and a hex digit (so `%3a` can meet the
+    escape of `:`), case pairs, dots, separators, `:`, and a non-ASCII letter with an
+    uppercase twin. Two ids sharing a name -- exactly, or only under case folding --
+    would share a payload file.
+
+    Which characters a name may *contain* is the two tests above; this one is only
+    about distinctness, so that an unescaped `%` or a non-ASCII pass-through dies here
+    and nowhere else.
+    """
+    alphabet = "aA3.%:/_-0 \u00e9\u00c9"
+    ids = ["".join(chars) for n in range(4) for chars in itertools.product(alphabet, repeat=n)]
+    names = [payload_filename(case_id) for case_id in ids]
+
+    assert len(set(names)) == len(ids)
+    assert len({name.casefold() for name in names}) == len(ids)
+
+
+def test_the_duplicate_guard_checks_the_filename_not_the_string(tmp_path, monkeypatch):
+    """The key that must be unique is the payload *file*, so that is what is checked.
+
+    With today's injective encoding the two coincide, which is exactly why this needs
+    its own test: a guard on the string passes every other test here, and would pass
+    `Case-0`/`case-0` straight into one file again the day the encoding stops being
+    injective -- as the verbatim filename already was not, on a case-insensitive disk.
+    """
+    monkeypatch.setattr(
+        "autokernel_pbt.props.table.payload_filename", lambda case_id: f"{case_id.lower()}.st"
+    )
+    run = tmp_path / "run"
+    with pytest.raises(
+        ValueError,
+        match=r"^duplicate case_ids in one write, which would share a payload: "
+        r"\['Case-0', 'case-0'\]$",
+    ):
+        ExecutionTable(run).write([_tagged("Case-0", 1.0), _tagged("case-0", 2.0)])
+    assert not run.exists(), "rejected only after touching the filesystem"
+
+
+def test_base_case_ids_keep_their_legacy_payload_names():
+    # The recorded runs' base payloads are found under the encoded name directly; only
+    # relation-derived ids need the verbatim fallback.
+    assert payload_filename("softmax-g00000-base") == "softmax-g00000-base.safetensors"
+
+
+# --- Corpus identity is verifiable on read --------------------------------------
+
+
+def _drop_row(run) -> None:
+    _patch_rows(run, lambda table: table.filter(pc.not_equal(table["case_id"], "c1")))
+
+
+def _relabel_row(run) -> None:
+    """Same row count, a different id -- with a payload under the new name, so the
+    only thing left to notice is the fingerprint."""
+    def relabel(table: pa.Table) -> pa.Table:
+        ids = ["c9" if cid == "c1" else cid for cid in table.column("case_id").to_pylist()]
+        return table.set_column(table.schema.get_field_index("case_id"), "case_id", pa.array(ids))
+
+    _patch_rows(run, relabel)
+    shutil.copy(run / "tensors" / "c1.safetensors", run / "tensors" / "c9.safetensors")
+
+
+def _add_row(run) -> None:
+    def add(table: pa.Table) -> pa.Table:
+        extra = table.slice(0, 1)
+        extra = extra.set_column(extra.schema.get_field_index("case_id"), "case_id", pa.array(["c9"]))
+        return pa.concat_tables([table, extra])
+
+    _patch_rows(run, add)
+
+
+@pytest.mark.parametrize("edit", [_drop_row, _relabel_row, _add_row], ids=lambda f: f.__name__[1:])
+def test_rows_edited_under_an_intact_fingerprint_are_refused(tmp_path, edit):
+    """The case-id half of the fingerprint, checked rather than merely hashed.
+
+    The uuid half was mixed into one digest and never stored, so no reader could
+    recompute it: a table that lost a group kept its stamp and paired with the scores
+    that judged the group, every rate computed over a corpus nobody scored.
+    """
+    run = tmp_path / "run"
+    ExecutionTable(run).write([_result("c0"), _result("c1"), _result("c2")])
+    stamped = ExecutionTable(run).corpus_fingerprint()
+    edit(run)
+
+    expected = (
+        rf"^\S+/rows\.parquet carries corpus fingerprint {stamped}, whose case-id half "
+        rf"does not match the \d+ case id\(s\) the table holds"
+    )
+    with pytest.raises(ValueError, match=expected):
+        ExecutionTable(run).read()
+    with pytest.raises(ValueError, match=expected):
+        ExecutionTable(run).corpus_fingerprint()

@@ -21,6 +21,8 @@ runs/
 *.tar.gz
 results/
 *.tsv
+# ...except an experiment's ledger, which is its result, not runtime output.
+!experiments/**/results.tsv
 wandb/
 
 # GPU build artifacts

@@ -24,8 +24,31 @@ move.
 from __future__ import annotations
 
 import json
+import operator
 from dataclasses import dataclass
 from typing import Any
+
+import numpy as np
+
+
+def _as_int(field: str, value: Any) -> int:
+    """``value`` as a plain ``int``, refusing anything that is not already an integer.
+
+    ``operator.index`` rather than ``int()``: ``int`` would truncate ``1.5`` and parse
+    ``"1"``, quietly recording a run under a seed nobody chose. ``bool`` is refused
+    explicitly because it *is* an integer to ``operator.index`` -- ``True`` becomes a
+    silent ``1`` -- and a flag landing in ``seed`` is a mis-wired call, not a seed.
+    ``np.bool_`` is refused by the same rule rather than left to numpy's
+    DeprecationWarning, which names neither the field nor the spec.
+    """
+    if isinstance(value, (bool, np.bool_)):
+        msg = f"CaseSpec.{field} must be an integer, not a bool: got {value!r}"
+        raise TypeError(msg)
+    try:
+        return operator.index(value)
+    except TypeError as exc:
+        msg = f"CaseSpec.{field} must be an integer, got {value!r} of type {type(value).__name__}"
+        raise TypeError(msg) from exc
 
 
 @dataclass(frozen=True)
@@ -45,6 +68,11 @@ class CaseSpec:
         # at json.dumps, in a persistence path far from the mistake.
         object.__setattr__(self, "shape", tuple(int(d) for d in self.shape))
         object.__setattr__(self, "transforms", tuple(self.transforms))
+        # The same gap, one field over, and reachable from an ordinary sweep:
+        # `for seed in np.arange(5): run_task(seed=seed)` executed every case on the
+        # backend and then died in `to_json`, after the hardware was paid for.
+        object.__setattr__(self, "seed", _as_int("seed", self.seed))
+        object.__setattr__(self, "group_index", _as_int("group_index", self.group_index))
         if self.group_index < 0:
             msg = f"group_index must be non-negative, got {self.group_index}"
             raise ValueError(msg)

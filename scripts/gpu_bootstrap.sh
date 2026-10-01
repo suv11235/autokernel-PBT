@@ -9,7 +9,12 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 echo "== versions this run will be recorded under =="
+# A non-zero exit here stops the script (set -e). Printing "stop" and carrying on, as
+# this once did, went on to install and run the whole CPU suite on an instance that
+# cannot record, and failed only at the device tests -- where importorskip turns a
+# missing triton into "no tests ran", which names nothing.
 python3 - <<'PY'
+import sys
 import torch
 p = torch.cuda.get_device_properties(0)
 print(f"  torch      {torch.__version__}")
@@ -18,7 +23,8 @@ try:
     import triton
     print(f"  triton     {triton.__version__}")
 except ImportError:
-    print("  triton     MISSING -- stop, the run cannot proceed")
+    print("  triton     MISSING -- stop, the run cannot proceed", file=sys.stderr)
+    sys.exit(1)
 print(f"  device     {p.name}")
 print(f"  capability {p.major}.{p.minor}")
 print(f"  sms        {p.multi_processor_count}")

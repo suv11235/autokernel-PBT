@@ -35,6 +35,13 @@ def _vandal_kernel(x_ptr, y_ptr, n_cols, BLOCK: tl.constexpr):
     tl.store(y_ptr + row * n_cols + offs, x, mask=mask)
 
 
+@triton.jit
+def _uncompilable_kernel(x_ptr, y_ptr, n_cols, BLOCK: tl.constexpr):
+    """`tl.arange` requires a power-of-two range, so this is refused at compile time."""
+    offs = tl.arange(0, 3)
+    tl.store(y_ptr + offs, tl.load(x_ptr + offs))
+
+
 @pytest.mark.parametrize("task_id", ["relu", "softmax", "layernorm"])
 def test_the_triton_kernel_agrees_with_its_numpy_reference(task_id, torch_cuda, triton_module):
     from autokernel_pbt.props.backends.triton_backend import TritonBackend
@@ -73,6 +80,39 @@ def test_compiled_telemetry_is_populated_on_device(task_id, torch_cuda, triton_m
         assert result.telemetry[key] is not MISSING, f"{key} came back MISSING on device"
 
 
+def test_a_kernel_that_fails_to_compile_is_a_compile_error_on_device(torch_cuda, triton_module):
+    """A REAL Triton compile failure, classified by the real backend.
+
+    The CPU test plants a stand-in `triton.compiler.errors`; only this one proves the
+    installed Triton raises a type `_triton_compile_error_types` actually finds. If it
+    fails as LAUNCH_ERROR, this release keeps `CompilationError` somewhere new -- add
+    the location to `_TRITON_COMPILE_ERROR_LOCATIONS`.
+    """
+    from autokernel_pbt.props.backends.triton_backend import TritonBackend
+    from autokernel_pbt.props.backends.triton_kernel import TritonKernel
+    from autokernel_pbt.props.case import Case
+    from kernels.triton.ladder import _launcher
+
+    kernel = TritonKernel(
+        kernel_id="uncompilable",
+        jit_fn=_uncompilable_kernel,
+        grid=lambda shape, ce: (1,),
+        constexprs={"BLOCK": 4},
+        launcher=_launcher(_uncompilable_kernel),
+    )
+    case = Case(
+        case_id="c0",
+        group_id="g0",
+        relation="base",
+        task_id="relu",
+        dtype="float32",
+        shape=(1, 4),
+        tensors={"x": np.ones((1, 4), dtype=np.float32)},
+    )
+    result = TritonBackend().run(kernel, case)
+    assert result.status is Status.COMPILE_ERROR, result.error
+
+
 def test_a_kernel_that_writes_to_its_input_is_caught_on_device(torch_cuda, triton_module):
     """The integrity check firing for real -- it cannot be exercised off-device.
 
@@ -93,27 +133,33 @@ def test_a_kernel_that_writes_to_its_input_is_caught_on_device(torch_cuda, trito
         kernel(x=np.ones((4, 8), dtype=np.float32))
 
 
-@pytest.mark.gpu
-def test_correct_variants_are_rejected_by_the_admission_gate():
+def test_correct_variants_are_rejected_by_the_admission_gate(torch_cuda, triton_module):
     """The false-positive population must be verified correct, not asserted correct.
 
     A "correct variant" the gate admits is not a variant but a mutant -- and one
     written for this population, ``layernorm_sumsq``, turned out to be exactly that.
     See ``docs/measurements/2026-08-19-false-positive-rate.md``.
+
+    `verdict is not True` alone was vacuous: a variant that never ran (every row a
+    LAUNCH_ERROR) is rejected as "not judgeable" and passed it. The rejection must be
+    the specific one -- "not broken" -- and must rest on every group having run.
     """
-    from autokernel_pbt.corpus.gate import admit
+    from autokernel_pbt.corpus.gate import Rejection, admit
     from autokernel_pbt.props.backends.triton_backend import TritonBackend
-    from autokernel_pbt.props.generator import Generator
-    from autokernel_pbt.props.tasks import REFERENCES, TASKS
     from kernels.mutants.correct_variants import TASK_OF, VARIANTS, correct_variant
 
     backend = TritonBackend()
     for name in VARIANTS:
         task = TASKS[TASK_OF[name]]
+        groups = Generator(task.domain, seed=0).generate(len(task.domain.shapes))
         rows = [
             backend.run(correct_variant(name, case.shape[-1]), case)
-            for group in Generator(task.domain, seed=0).generate(len(task.domain.shapes))
+            for group in groups
             for case in group.cases
         ]
         verdict = admit(rows, reference_fn=REFERENCES[TASK_OF[name]])
-        assert verdict is not True, f"{name} was admitted as broken; it is not a correct variant"
+        assert isinstance(verdict, Rejection), f"{name} was admitted as broken"
+        assert verdict.reason.startswith("not broken"), f"{name}: {verdict.reason}"
+        assert verdict.groups_judgeable == len(groups), (
+            f"{name} ran to OK on only {verdict.groups_judgeable} of {len(groups)} groups"
+        )

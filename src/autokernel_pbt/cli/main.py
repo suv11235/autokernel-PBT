@@ -23,7 +23,10 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     if args.command == "bench":
-        cfg = load_config(args.config)
+        try:
+            cfg = load_config(args.config)
+        except FileNotFoundError as exc:
+            bench.error(str(exc))  # exits 2 with usage, like any other bad argument
         result = run_harness(
             args.kernel,
             args.reference,

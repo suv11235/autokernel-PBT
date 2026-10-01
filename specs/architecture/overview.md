@@ -30,13 +30,18 @@ flowchart LR
 
 ## Data flow (one evaluation)
 
-1. **Harness** compiles a candidate kernel, runs correctness stages, benchmarks vs baseline.
-2. **Correctness** must pass before any speedup is recorded.
-3. **Ledger** appends validated JSON lines to `.runs/<run_id>/results.jsonl`.
+1. **Driver** (`props/driver.run_task`) generates case groups from a seed, runs the kernel on a
+   backend, and records every execution to `<run_dir>/rows.parquet` + `tensors/*.safetensors`.
+2. **Arms** score the recorded rows offline, in randomized order, into `<run_dir>/scores.parquet`;
+   `driver.read_run` returns the pair only if their corpus fingerprints match.
+3. **Metrics** (`metrics.rates`, `metrics.report`) compute per-arm detection rates per case group.
+
+`harness/bench.py` is the feature 0001/0002 skeleton: its stages always pass and its benchmark
+numbers are placeholders.
 
 ## Contracts
 
-See [`contracts/`](../contracts/) for typed boundaries between modules.
+See [`contracts/`](../../contracts/) for typed boundaries between modules.
 
 ## Non-goals (v0.1 skeleton)
 

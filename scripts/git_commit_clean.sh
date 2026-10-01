@@ -2,10 +2,21 @@
 # Create a commit without Cursor-injected Co-authored-by trailers.
 # Usage: scripts/git_commit_clean.sh -m "subject" [-m "body"...]
 #        scripts/git_commit_clean.sh -F message.txt
+#
+# -m and -F are mutually exclusive: git honours both, but this helper used to keep the
+# file and drop every -m without a word, so it now refuses the combination instead.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
+
+# On a detached HEAD, `git reset --soft` below moves HEAD and no branch: the commit
+# is reachable only from the reflog, and the next checkout orphans it. That happened
+# once. Refuse up front -- before anything is written.
+if ! git symbolic-ref -q HEAD >/dev/null; then
+  echo "error: HEAD is detached; check out a branch first (git switch <branch>)" >&2
+  exit 1
+fi
 
 if ! git diff --cached --quiet; then
   :
@@ -17,7 +28,20 @@ fi
 MSG_FILE=$(mktemp)
 trap 'rm -f "$MSG_FILE"' EXIT
 
-if [ "${1:-}" = "-F" ] && [ -n "${2:-}" ]; then
+usage() {
+  echo "usage: $0 -m msg [-m body...] | -F file" >&2
+  exit 1
+}
+
+if [ "${1:-}" = "-F" ]; then
+  if [ $# -ne 2 ]; then
+    echo "error: -F takes exactly one file and cannot be combined with -m" >&2
+    usage
+  fi
+  if [ ! -f "$2" ]; then
+    echo "error: message file not found: $2" >&2
+    exit 1
+  fi
   sed '/^Co-authored-by: Cursor/d' "$2" > "$MSG_FILE"
 else
   git interpret-trailers --parse <<<"" >/dev/null 2>&1 || true
@@ -27,6 +51,16 @@ else
     case "$1" in
       -m)
         shift
+        if [ $# -eq 0 ]; then
+          echo "error: -m needs a message" >&2
+          usage
+        fi
+        # An empty paragraph is almost always an unset variable (`-m "$BODY"`), and an
+        # empty subject makes a commit nothing can describe.
+        if ! [[ "$1" =~ [^[:space:]] ]]; then
+          echo "error: empty -m message" >&2
+          exit 1
+        fi
         # git itself separates -m paragraphs with a blank line. Without this the body
         # is glued onto the subject, so `git log --oneline` prints the whole message
         # as one line and every tool that reads a subject sees the entire commit.
@@ -36,16 +70,21 @@ else
         FIRST_M=0
         printf '%s\n' "$1" >> "$MSG_FILE"
         ;;
+      -F)
+        echo "error: -F cannot be combined with -m" >&2
+        usage
+        ;;
       *)
-        echo "usage: $0 -m msg [-m body...] | -F file" >&2
-        exit 1
+        usage
         ;;
     esac
     shift
   done
 fi
 
-if [ ! -s "$MSG_FILE" ]; then
+# Whitespace-only counts as empty: `-F` of a blank file, or one that held nothing but
+# the stripped trailer.
+if ! grep -q '[^[:space:]]' "$MSG_FILE"; then
   echo "error: empty commit message" >&2
   exit 1
 fi

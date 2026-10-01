@@ -21,6 +21,7 @@ import triton.language as tl
 
 from autokernel_pbt.corpus.mutant import Mutant
 from autokernel_pbt.props.backends.triton_kernel import TritonKernel
+from kernels.mutants.taxonomy import intended_class
 from kernels.triton.ladder import _launcher, block_for
 
 TAXONOMY = {
@@ -136,7 +137,7 @@ def blinded_mutant(subcategory: str, n_cols: int) -> tuple[Mutant, TritonKernel]
     record = Mutant(
         kernel_id=adapter.kernel_id,
         task_id="softmax",
-        intended_class=f"type_and_operator/{subcategory}",
+        intended_class=intended_class(subcategory),
         taxonomy_quote=TAXONOMY[subcategory],
         backend="triton",
         fn=adapter,

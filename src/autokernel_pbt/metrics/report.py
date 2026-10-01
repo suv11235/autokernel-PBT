@@ -39,7 +39,24 @@ def render(rates: dict[str, dict[str, ArmRates]], *, backend: str) -> str:
     `rates` is mutant id -> arm name -> rates. An empty mapping still renders the
     header, because the caveats are what the header exists for and a report with no
     rows is still read.
+
+    A mutant with NO arms -- ``rates_from_run`` on a run that was recorded but never
+    scored -- is refused rather than rendered as "not scored". The report is the
+    published artifact and a row with no number in it is not a rate; it would also be
+    indistinguishable from a run the driver refused outright. Scoring is offline and
+    free to re-run, so refusing costs nothing but the re-run. (Rendered, it was worse
+    than uninformative: with no arm columns at all the header gained an empty cell
+    the separator did not, and the table stopped being a table.)
     """
+    unscored = sorted(mutant for mutant, per_arm in rates.items() if not per_arm)
+    if unscored:
+        msg = (
+            f"mutant {unscored[0]!r} has no scored arm; its run has not been scored "
+            f"(unscored: {unscored}). Score it before rendering -- a row with no rate in "
+            f"it cannot be read as one"
+        )
+        raise ValueError(msg)
+
     lines = [_HEADER, f"\n**Backend:** `{backend}`\n"]
     if not rates:
         lines.append("_No runs scored._\n")

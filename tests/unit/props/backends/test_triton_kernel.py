@@ -11,6 +11,7 @@ import numpy as np
 import pytest
 
 from autokernel_pbt.props.backends.base import OutputContractError
+from autokernel_pbt.props.backends.telemetry import MISSING
 from autokernel_pbt.props.backends.triton_kernel import TritonKernel
 
 
@@ -114,6 +115,104 @@ def test_source_hash_distinguishes_two_kernels_sharing_a_name():
 def test_source_hash_is_stable_for_one_kernel():
     adapter = _adapter()
     assert adapter.source_hash == adapter.source_hash
+
+
+class _FakeJITFunction:
+    """Shaped like `triton.runtime.jit.JITFunction`, as far as hashing can see.
+
+    An *instance*, not a function, so `inspect.getsource` raises TypeError on it -- as
+    it does on the real one. It wraps the Python function as `.fn`, optionally carries
+    the text Triton compiles as `.src`, and, like Triton 3.3, sets `__module__` and
+    `__name__` but no `__qualname__`, with a repr naming the function and never its
+    body. Anything hashing only those names cannot see an edit to the kernel.
+    """
+
+    def __init__(self, fn, src: str | None = None) -> None:
+        self.fn = fn
+        if src is not None:
+            self.src = src
+        self.__module__ = "kernels.triton.ladder"
+        self.__name__ = "_softmax_kernel"
+
+    def __repr__(self) -> str:
+        return "JITFunction(kernels.triton.ladder:_softmax_kernel)"
+
+
+def _body_correct(x_ptr, y_ptr, n_cols):  # pragma: no cover - hashed, never called
+    return "correct body"
+
+
+def _body_broken(x_ptr, y_ptr, n_cols):  # pragma: no cover - hashed, never called
+    return "BROKEN body, different code"
+
+
+def test_source_hash_covers_the_text_triton_compiles():
+    # Same wrapped function, different `.src`: `.src` is what Triton parses and
+    # compiles, so it is the body whose edit must change the identity.
+    a = _adapter(jit_fn=_FakeJITFunction(_body_correct, src="def k():\n    return 1\n"))
+    b = _adapter(jit_fn=_FakeJITFunction(_body_correct, src="def k():\n    return 2\n"))
+    assert a.source_hash != b.source_hash
+
+
+def test_source_hash_falls_back_to_the_wrapped_function_body():
+    # No `.src`: the wrapped `.fn` is the next most faithful source of the body.
+    a = _adapter(jit_fn=_FakeJITFunction(_body_correct))
+    b = _adapter(jit_fn=_FakeJITFunction(_body_broken))
+    assert a.source_hash != b.source_hash
+
+
+@pytest.mark.parametrize("role", ["jit_fn", "launcher"])
+def test_source_hash_is_missing_when_a_component_has_no_source(role):
+    """A hash of a *name* is not an identity, and must not be recorded as one.
+
+    `len` has no Python source. The old fallback hashed `module.qualname` instead, so
+    two different kernels sharing a name shared a hash -- exactly what the field
+    exists to rule out. MISSING says "not captured" honestly.
+    """
+    assert _adapter(**{role: len}).source_hash is MISSING
+
+
+def test_compiled_is_reset_at_the_start_of_every_call():
+    """An artifact describes the call that produced it, never a later one.
+
+    One adapter serves every case of its shape. If a later call fails before
+    recording -- a compile failure for a new specialization -- its row would
+    otherwise report the previous call's registers and spills as its own.
+    """
+    sentinel = object()
+    calls = []
+
+    def launcher(*, grid, constexprs, record_compiled, **inputs):
+        calls.append(None)
+        if len(calls) == 1:
+            record_compiled(sentinel)
+            return np.zeros((2, 3), dtype=np.float32)
+        msg = "compile failed for this specialization"
+        raise RuntimeError(msg)
+
+    adapter = _adapter(launcher=launcher)
+    adapter(x=np.ones((2, 3), dtype=np.float32))
+    assert adapter.compiled is sentinel
+    with pytest.raises(RuntimeError, match="compile failed for this specialization"):
+        adapter(x=np.ones((2, 3), dtype=np.float32))
+    assert adapter.compiled is None
+
+
+def test_a_call_whose_grid_fails_does_not_report_the_previous_grid():
+    # Same defect one field over: the grid is recorded before the launch, so a grid
+    # callable that raises would leave the previous call's geometry in place.
+    def grid(shape, constexprs):
+        if shape[0] == 0:
+            msg = "no rows to launch over"
+            raise ValueError(msg)
+        return (shape[0],)
+
+    adapter = _adapter(grid=grid)
+    adapter(x=np.ones((2, 3), dtype=np.float32))
+    assert adapter.launch_telemetry()["grid"] == [2]
+    with pytest.raises(ValueError, match="no rows to launch over"):
+        adapter(x=np.ones((0, 3), dtype=np.float32))
+    assert adapter.launch_telemetry()["grid"] is None
 
 
 def test_compiled_is_none_before_the_first_call():

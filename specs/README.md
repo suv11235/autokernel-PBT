@@ -20,11 +20,11 @@ Every feature starts as a **spec** before code. Tests are written from **accepta
 | [0005](./features/0005-measurable-runs/spec.md) | Measurable runs | implemented |
 | [0006](./features/0006-four-arms/spec.md) | Four arms and the normalization rung | implemented |
 | [0007](./features/0007-triton-backend/spec.md) | Triton backend and first hardware run | implemented |
-| [0008](./features/0008-corpus-and-metrics/spec.md) | Mutation corpus and metrics | in progress |
+| [0008](./features/0008-corpus-and-metrics/spec.md) | Mutation corpus and metrics | implemented (Triton corpus; NumPy mutants in scope item 2 not yet built) |
 
 ## Schemas
 
-Shared JSON Schema definitions live in [`schemas/`](./schemas/). Harness results and kernel candidates must validate against these before recording a run.
+Shared JSON Schema definitions live in [`schemas/`](./schemas/). Only `harness_result` is enforced (`src/autokernel_pbt/harness/runner.py`); `kernel_candidate` and `benchmark_config` are not yet used by any code. Recorded runs are Parquet and are validated by `ExecutionTable` / `ScoreTable` on read.
 
 ## Architecture
 

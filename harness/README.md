@@ -1,20 +1,22 @@
 # Harness
 
-Fixed evaluation entrypoint for agent and test loops.
+CLI over the feature 0001/0002 skeleton. **Every stage passes and the benchmark numbers are
+placeholders** — it does not load the kernel or reference. The real pipeline is
+`autokernel_pbt.props.driver.run_task` (see `scripts/gpu_record.py`).
 
 ## Usage
 
 ```bash
 python harness/bench.py \
-  --kernel kernels/triton/candidate.py \
-  --reference kernels/triton/reference_relu.py \
+  --kernel path/to/candidate.py \
+  --reference path/to/reference.py \
   --config harness/configs/default.yaml \
   --dry-run --json
 ```
 
 ## Outputs
 
-JSON matching `specs/schemas/harness_result.schema.json`. Runs should be logged under `.runs/<run_id>/`.
+JSON matching `specs/schemas/harness_result.schema.json`. Nothing is persisted.
 
 ## Specs
 

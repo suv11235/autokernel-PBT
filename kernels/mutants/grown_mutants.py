@@ -28,6 +28,7 @@ import triton.language as tl
 
 from autokernel_pbt.corpus.mutant import Mutant
 from autokernel_pbt.props.backends.triton_kernel import TritonKernel
+from kernels.mutants.taxonomy import intended_class
 from kernels.triton.ladder import _launcher, block_for
 
 TAXONOMY = {
@@ -265,7 +266,7 @@ def grown_mutant(name: str, n_cols: int) -> tuple[Mutant, TritonKernel]:
     record = Mutant(
         kernel_id=adapter.kernel_id,
         task_id="softmax",
-        intended_class=f"type_and_operator/{CLASS_OF[name]}",
+        intended_class=intended_class(CLASS_OF[name]),
         taxonomy_quote=TAXONOMY[CLASS_OF[name]],
         backend="triton",
         fn=adapter,
