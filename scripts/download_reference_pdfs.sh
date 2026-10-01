@@ -38,6 +38,10 @@ while IFS=, read -r level sublevel filename arxiv_id title; do
     continue
   fi
   echo "fetch $arxiv_id -> $out"
-  curl -fsSL -o "$out" "https://arxiv.org/pdf/${arxiv_id}.pdf"
+  # Into a sibling, then renamed: an interrupted curl leaves a non-empty partial file,
+  # which the skip test above would otherwise accept as done on every later run. The
+  # rename is atomic, so "$out" exists only once the download completed.
+  curl -fsSL -o "$out.part" "https://arxiv.org/pdf/${arxiv_id}.pdf"
+  mv -f "$out.part" "$out"
   sleep 0.2
 done < "$MANIFEST"
