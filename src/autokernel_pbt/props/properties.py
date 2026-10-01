@@ -249,7 +249,15 @@ class RowsSumToOne:
             # OutputsAreFinite reports this; a sum over NaN is not a row-sum defect.
             return _result(self, Verdict.INCONCLUSIVE, _NONFINITE_DETAIL, case_id=case_id)
 
-        sums = np.sum(y, axis=-1)
+        # Finite elements can still sum past the dtype's range: a float16 row of
+        # 30000s overflows, and overflow in opposite directions meets as inf - inf.
+        # Under filterwarnings=["error"] the RuntimeWarning aborted the scoring pass
+        # on an output that production config simply FAILed -- the test-loud /
+        # production-silent split the oracles' errstate exists to prevent. Suppressed
+        # and read off the result instead: residual_ratio answers inf for a
+        # non-finite sum, so the row still FAILs, as a row not summing to one should.
+        with np.errstate(over="ignore", invalid="ignore"):
+            sums = np.sum(y, axis=-1)
         try:
             # n= explicitly: `sums` has shape (rows,), so the default last-axis length
             # would be the ROW COUNT, not the reduction length the log2(n) rounding
@@ -310,10 +318,15 @@ class ShiftInvariance:
             detail = f"group missing {BASE_RELATION!r} or {self.requires_relation!r} case"
             return _result(self, Verdict.INCONCLUSIVE, detail, group_id=group_id)
         if not _usable(base) or not _usable(partner):
-            detail = (
-                f"group contains a failed execution "
-                f"(base={base.status}, partner={partner.status})"
+            # Each unusable side names its own cause. Reporting both statuses read
+            # "failed execution (base=ok, partner=ok)" when the real defect was an
+            # absent output -- a cause that is not the cause, in the field triage reads.
+            causes = ", ".join(
+                f"{side}: {_unusable_detail(r)}"
+                for side, r in (("base", base), ("partner", partner))
+                if not _usable(r)
             )
+            detail = f"group contains an unusable execution ({causes})"
             return _result(self, Verdict.INCONCLUSIVE, detail, group_id=group_id)
 
         base_y = base.outputs[OUTPUT_NAME]
@@ -442,20 +455,30 @@ class RowsHaveUnitVariance:
         #
         # Keying off the input is also what `acceptance.yaml` already claims this
         # property does: "except rows a constant input zeroed".
-        x = row.case.tensors.get(PRIMARY_INPUT)
-        if x is None or x.shape != y.shape:
-            # No usable input to key off — a task whose primary tensor is named
-            # differently, or a kernel that reshaped. Fall back to abstaining only
-            # when the whole output is flat, which is the pre-existing behaviour.
-            constant_rows = np.zeros(y.shape[:-1], dtype=bool) if y.ndim else np.array([False])
-        else:
-            constant_rows = np.ptp(np.asarray(x, dtype=np.float64), axis=-1) == 0.0
-
         wide = np.asarray(y, dtype=np.float64)
         variances = np.var(wide, axis=-1)
+        x = row.case.tensors.get(PRIMARY_INPUT)
+        keyed_off_input = x is not None and x.shape == y.shape
+        if keyed_off_input:
+            constant_rows = np.ptp(np.asarray(x, dtype=np.float64), axis=-1) == 0.0
+        else:
+            # No usable input to key off -- a task whose primary tensor is named
+            # differently, or a kernel that reshaped. Fall back to the output: abstain
+            # on rows that came out EXACTLY flat, which is what a constant input
+            # produces. This reopens the zeroed-buffer blind spot above, but only on
+            # this path; the alternative it replaced marked no row constant at all,
+            # and so FAILed every correct kernel on a constant input.
+            constant_rows = variances == 0.0
+
         judged = variances[~constant_rows]
         if judged.size == 0:
-            detail = "every row had a constant input, which layernorm maps to zeros"
+            if keyed_off_input:
+                detail = "every row had a constant input, which layernorm maps to zeros"
+            else:
+                detail = (
+                    "no usable input to key off, and every output row was flat; "
+                    "a constant input maps to zeros"
+                )
             return _result(self, Verdict.INCONCLUSIVE, detail, case_id=case_id)
 
         eps = float(np.finfo(y.dtype).eps)

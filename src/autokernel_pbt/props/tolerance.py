@@ -15,8 +15,11 @@ import numpy as np
 DEFAULT_THRESH = 30.0
 
 # dtype kinds that have a unit roundoff. Everything else (bool, signed and
-# unsigned int) is exact and has no rounding budget to normalize by.
-_INEXACT_KINDS = "fc"
+# unsigned int) is exact and has no rounding budget to normalize by. Complex is
+# excluded too, though np.finfo accepts it: the ratio is a real-valued norm computed
+# after a float64 cast, and that cast silently keeps only the real part -- a candidate
+# wrong only in its imaginary part scored 0.0 and passed.
+_INEXACT_KINDS = "f"
 
 
 class ExactDtypeError(ValueError):
@@ -35,6 +38,20 @@ def _machine_eps(dtype: type | np.dtype) -> float:
     return float(np.finfo(dtype).eps)
 
 
+def _complex_error(what: str, dtype: np.dtype) -> ExactDtypeError:
+    """The refusal for a complex operand, raised on the oracles' INCONCLUSIVE path.
+
+    An ``ExactDtypeError`` although complex is not exact, because the callers'
+    contract is the same for both: this question does not apply here, so abstain.
+    A bare ValueError would abort the scoring pass instead.
+    """
+    msg = (
+        f"{what} is complex ({dtype!r}); a test ratio is a real-valued norm, and "
+        f"casting to float64 would discard the imaginary part, so it is undefined here"
+    )
+    return ExactDtypeError(msg)
+
+
 def _resolve_eps(candidate: np.ndarray, dtype: type | np.dtype | None) -> float:
     """Pick the unit roundoff, defaulting to the candidate's own dtype.
 
@@ -50,6 +67,8 @@ def _resolve_eps(candidate: np.ndarray, dtype: type | np.dtype | None) -> float:
     """
     resolved = np.dtype(dtype) if dtype is not None else np.asarray(candidate).dtype
     if resolved.kind not in _INEXACT_KINDS:
+        if resolved.kind == "c":
+            raise _complex_error("the rounding dtype", resolved)
         msg = (
             f"dtype {resolved!r} is exact and has no unit roundoff, so a test ratio is "
             f"undefined for it; compare exact outputs for equality instead, or pass "
@@ -94,7 +113,8 @@ def residual_ratio(
 
     ``dtype`` selects the unit roundoff; it defaults to the candidate's dtype. Pass it
     explicitly when comparing a low-precision candidate promoted to float64. Raises
-    ``ExactDtypeError`` if the resolved dtype is exact.
+    ``ExactDtypeError`` if the resolved dtype is exact, or if it or either operand is
+    complex.
 
     ``n`` is the length of the accumulation the error grew over, and enters the
     divisor as ``log2(n)``, the pairwise-summation bound. It defaults to the
@@ -119,6 +139,16 @@ def residual_ratio(
     # is bypassable by a second defect: an exact-dtype candidate that also has a
     # shape mismatch would escape as inf -> FAIL, the false positive the raise
     # exists to prevent, and a bad n would be masked by an empty input.
+    #
+    # Both operands' VALUES must be real, independently of the rounding dtype: the
+    # reference arm passes dtype=got.dtype, so a complex reference against a real
+    # output resolves a perfectly good eps, and ShiftInvariance passes the base's
+    # dtype for a partner that may differ. Checked first so the message names the
+    # operand rather than a dtype the caller may never have chosen.
+    for side, values in (("candidate", candidate), ("reference", reference)):
+        kind = np.asarray(values).dtype
+        if kind.kind == "c":
+            raise _complex_error(side, kind)
     eps = _resolve_eps(candidate, dtype)
     given_n = _validate_n(n)
 
@@ -173,7 +203,12 @@ def residual_ratio(
     # scored 6.1 at n=4096 and passed, a bug the field-default allclose catches. A
     # reference arm that loses to the baseline it exists to beat inverts the comparison
     # it anchors. max(..., 1.0) keeps n=1 and n=2 from producing a zero divisor.
-    return residual / (scale * eps * max(float(np.log2(length)), 1.0))
+    #
+    # Divide by the scale FIRST. For a float64 reference near 1e-310, scale * eps
+    # underflows to exactly 0.0 and the single quotient raises ZeroDivisionError on
+    # finite data, aborting the pass. residual / scale is a relative error and stays
+    # representable (it can only overflow to inf, which is a FAIL by any threshold).
+    return (residual / scale) / (eps * max(float(np.log2(length)), 1.0))
 
 
 def within_threshold(ratio: float, thresh: float = DEFAULT_THRESH) -> bool:

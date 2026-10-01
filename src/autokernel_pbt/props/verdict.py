@@ -61,6 +61,18 @@ class PropertyResult:
         if self.tier not in VALID_TIERS:
             msg = f"tier must be in {sorted(VALID_TIERS)}, got {self.tier}"
             raise ValueError(msg)
+        # Coerce the wire value to the member. A bare "fail" compares equal to
+        # Verdict.FAIL but is not identical to it, and ``summarize`` (like
+        # ``metrics.rates``) dispatches on identity -- so an uncoerced string fell
+        # through both of its checks and summarized as PASS. Parquet, JSON and
+        # hand-built results all carry the wire value, so this is the one place every
+        # consumer is fixed at once. Frozen, hence object.__setattr__.
+        try:
+            verdict = Verdict(self.verdict)
+        except ValueError:
+            msg = f"verdict must be one of {[v.value for v in Verdict]}, got {self.verdict!r}"
+            raise ValueError(msg) from None
+        object.__setattr__(self, "verdict", verdict)
 
 
 def summarize(results: Iterable[PropertyResult]) -> Verdict:

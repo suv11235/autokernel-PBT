@@ -168,6 +168,22 @@ def _require_rows(arm: str, rows: Sequence[ExecutionResult]) -> None:
         raise ValueError(msg)
 
 
+def _require_case_id(arm: str, case_id: str) -> None:
+    """The per-row arms' half of the attribution invariant.
+
+    ``properties._result`` enforces it for the declarative arm; these arms build their
+    results directly, so without this a row with an empty case_id came back as a
+    verdict carrying neither id -- orphaned for good once ``HybridOracle`` flattens two
+    arms into one list. A bad *call*, free to fix, so it raises.
+    """
+    if not case_id:
+        msg = (
+            f"oracle {arm!r} produced an unattributed result: a per-row arm must set "
+            f"case_id, got case_id={case_id!r}"
+        )
+        raise ValueError(msg)
+
+
 class ReferenceOracle:
     """One property: the output matches a trusted recomputation of it.
 
@@ -236,6 +252,7 @@ class ReferenceOracle:
         The reference arm is per-row, so it always attributes to the case; there is
         no group-scoped path here to get wrong.
         """
+        _require_case_id(self.name, case_id)
         return PropertyResult(
             property_name=REFERENCE_PROPERTY,
             tier=TIER_PORTABLE,
@@ -419,6 +436,7 @@ class AllcloseOracle:
         This arm is per-row, so it always attributes to the case; there is no
         group-scoped path here to get wrong.
         """
+        _require_case_id(self.name, case_id)
         return PropertyResult(
             property_name=ALLCLOSE_PROPERTY,
             tier=TIER_PORTABLE,

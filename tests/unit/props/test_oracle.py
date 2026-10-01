@@ -20,6 +20,8 @@ The other load-bearing assertions here:
 
 from __future__ import annotations
 
+import re
+
 import numpy as np
 import pytest
 
@@ -86,9 +88,10 @@ def _row(
     y: np.ndarray | None,
     relation: str = BASE_RELATION,
     status: Status = Status.OK,
+    case_id: str | None = None,
 ) -> ExecutionResult:
     case = Case(
-        case_id=f"c-{relation}",
+        case_id=f"c-{relation}" if case_id is None else case_id,
         group_id="g0",
         relation=relation,
         task_id="softmax",
@@ -298,10 +301,18 @@ def test_every_arm_attributes_every_result(label, kernel):
 
 
 def test_reference_oracle_attributes_an_unusable_row():
-    """The path with no output at all still has a case_id in hand."""
-    results = _reference().evaluate([_row(X, None, status=Status.LAUNCH_ERROR)])
+    """A failed execution is INCONCLUSIVE and still has a case_id in hand.
+
+    The output is deliberately *present and correct*. A row with no output is caught
+    by the missing-output guard first, so it certifies the status check without ever
+    reaching it. An earlier version of this test passed ``y=None`` and did exactly
+    that: deleting the status check left every reference-arm test green, and the arm
+    then PASSed a row whose kernel never completed.
+    """
+    results = _reference().evaluate([_row(X, _softmax(X), status=Status.LAUNCH_ERROR)])
     _assert_attributed(results)
     assert results[0].verdict is Verdict.INCONCLUSIVE
+    assert results[0].detail == f"status={Status.LAUNCH_ERROR!r}"
     assert results[0].case_id == "c-base"
 
 
@@ -317,6 +328,28 @@ def test_reference_oracle_attributes_an_empty_output():
     results = _reference().evaluate([_row(empty, empty)])
     assert results[0].verdict is Verdict.INCONCLUSIVE
     assert results[0].case_id == "c-base"
+
+
+@pytest.mark.parametrize(
+    "arm",
+    [ReferenceOracle(_softmax), AllcloseOracle(_softmax)],
+    ids=["reference", "allclose"],
+)
+def test_per_row_arms_refuse_to_emit_an_unattributed_result(arm):
+    """The declarative arm raises on an orphan; the per-row arms must too.
+
+    These arms build their results directly rather than through
+    ``properties._result``, so they enforced nothing: a row with an empty case_id came
+    back as a PASS carrying neither id -- orphaned for good once ``HybridOracle``
+    flattens two arms into one list. That is a bad *call*, free to fix, so it raises.
+    """
+    row = _row(X, _softmax(X), case_id="")
+    expected = (
+        f"oracle {arm.name!r} produced an unattributed result: a per-row arm must set "
+        f"case_id, got case_id=''"
+    )
+    with pytest.raises(ValueError, match=re.escape(expected)):
+        arm.evaluate([row])
 
 
 def test_reference_results_are_one_per_row():
@@ -829,6 +862,22 @@ def test_allclose_arm_is_inconclusive_when_the_reference_is_non_finite():
     result = _allclose(broken).evaluate([_row(X, _softmax(X))])[0]
     assert result.verdict is Verdict.INCONCLUSIVE
     assert "reference" in result.detail
+
+
+def test_allclose_arm_survives_an_overflowing_reference():
+    """The errstate around the allclose arm's reference call is load-bearing.
+
+    Same defect as the reference arm's test: an unstable reference overflows, and
+    under ``filterwarnings = ["error"]`` the RuntimeWarning aborts the scoring pass,
+    while under production config the same reference silently FAILs a correct kernel.
+    """
+    def unstable(**kw: np.ndarray) -> np.ndarray:
+        e = np.exp(kw["x"] * np.float32(1e3))  # overflows float32
+        return (e / e.sum(axis=-1, keepdims=True)).astype(np.float32)
+
+    result = _allclose(unstable).evaluate([_row(X, _softmax(X))])[0]  # must not raise
+    assert result.verdict is Verdict.INCONCLUSIVE
+    assert result.detail == "reference output is non-finite; the reference, not the kernel"
 
 
 def test_allclose_arm_fails_a_shape_disagreement_that_broadcasts_to_equal():

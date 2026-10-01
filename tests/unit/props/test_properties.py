@@ -370,6 +370,39 @@ def test_rows_sum_to_one_normalizes_by_the_reduction_length_not_the_row_count():
     assert ratio < DEFAULT_THRESH < 120.0 / max(np.log2(rows), 1.0)
 
 
+def test_rows_sum_to_one_fails_a_finite_output_whose_row_sum_overflows():
+    """Every element is finite; only the row sum is not, and that is a FAIL.
+
+    ``np.sum`` overflows float16 past 65504 and emits a RuntimeWarning, which this
+    project's ``filterwarnings = ["error"]`` turns into an exception: the same output
+    aborted the scoring pass under test config and FAILed under production config.
+    A broken softmax that forgets max-subtraction and normalization (``np.exp``)
+    produces exactly this. An overflowed sum is a row that does not sum to one, so
+    the verdict stays FAIL -- reached through ``residual_ratio``'s inf, not abstained.
+    """
+    y = np.full((1, 4), 30000, dtype=np.float16)
+    assert np.all(np.isfinite(y)), "the point of this test is a finite output"
+    result = RowsSumToOne().check(_row(np.zeros((1, 4), dtype=np.float32), y))
+    assert result.verdict is Verdict.FAIL
+    assert result.detail == f"row-sum test ratio inf >= {DEFAULT_THRESH}"
+
+
+def test_rows_sum_to_one_fails_a_finite_output_whose_row_sum_is_nan():
+    """Overflow in opposite directions meets as inf - inf, which is NaN.
+
+    The second warning numpy raises on the way, "invalid value", is suppressed for
+    the same reason as the first; NaN is non-finite, so it still FAILs.
+    """
+    big = np.float32(3e38)
+    y = np.array([[big, big, -big, -big, 0, 0, 0, 0]], dtype=np.float32)
+    with np.errstate(over="ignore", invalid="ignore"):
+        # numpy's pairwise sum adds (y0 + y1) + (y2 + y3): +inf meets -inf.
+        assert np.isnan(np.sum(y, axis=-1)).all(), "the row sum must go through inf - inf"
+    result = RowsSumToOne().check(_row(np.zeros((1, 8), dtype=np.float32), y))
+    assert result.verdict is Verdict.FAIL
+    assert result.detail == f"row-sum test ratio inf >= {DEFAULT_THRESH}"
+
+
 # --------------------------------------------------------------------------
 # ShiftInvariance
 # --------------------------------------------------------------------------
@@ -520,6 +553,24 @@ def test_shift_invariance_is_inconclusive_when_either_output_is_missing(missing_
     group = _shift_group(_softmax)
     group[missing_index].outputs = {}
     assert ShiftInvariance().check_group(group).verdict is Verdict.INCONCLUSIVE
+
+
+@pytest.mark.parametrize(
+    ("index", "defect", "expected"),
+    [
+        (1, "missing", f"group contains an unusable execution (partner: missing output {OUTPUT_NAME!r})"),
+        (0, "status", f"group contains an unusable execution (base: status={Status.LAUNCH_ERROR!r})"),
+    ],
+)
+def test_shift_invariance_detail_names_the_real_cause(index, defect, expected):
+    # "failed execution (base=ok, partner=ok)" names a cause that is not the cause
+    # when the real defect is an absent output; the details are what triage reads.
+    group = _shift_group(_softmax)
+    if defect == "missing":
+        group[index].outputs = {}
+    else:
+        group[index].status = Status.LAUNCH_ERROR
+    assert ShiftInvariance().check_group(group).detail == expected
 
 
 @pytest.mark.parametrize("empty_index", [0, 1])
@@ -702,6 +753,49 @@ def test_unit_variance_abstains_only_on_the_constant_rows():
     assert RowsHaveUnitVariance().check(_row(x, y)).verdict is Verdict.FAIL
 
 
+def _row_with(tensors: dict[str, np.ndarray], y: np.ndarray) -> ExecutionResult:
+    """A row whose primary input is named, or shaped, other than the output."""
+    first = next(iter(tensors.values()))
+    case = Case("c-base", "g0", BASE_RELATION, "layernorm", str(first.dtype), first.shape, tensors)
+    return ExecutionResult(case=case, outputs={OUTPUT_NAME: y})
+
+
+@pytest.mark.parametrize(
+    ("tensors", "y"),
+    [
+        # The primary input is not named "x", so there is nothing to key off.
+        ({"inp": np.full((2, 4), 3.0, dtype=np.float32)}, np.zeros((2, 4), dtype=np.float32)),
+        # The kernel flattened (17, 1) to (17,), so the input's rows are not the output's.
+        ({"x": np.full((17, 1), 2.0, dtype=np.float32)}, np.zeros((17,), dtype=np.float32)),
+    ],
+    ids=["renamed-input", "reshaped-output"],
+)
+def test_unit_variance_fallback_abstains_on_a_flat_output(tensors, y):
+    """Without a usable input, an exactly-flat output row is the constant-input row.
+
+    The fallback used to mark no row constant at all, so the correct all-zero output
+    of a constant input FAILed -- a false positive on a correct kernel, the exact
+    outcome the abstention exists to prevent, reached only because the input was
+    named or shaped differently.
+    """
+    result = RowsHaveUnitVariance().check(_row_with(tensors, y))
+    assert result.verdict is Verdict.INCONCLUSIVE
+    assert result.detail == (
+        "no usable input to key off, and every output row was flat; "
+        "a constant input maps to zeros"
+    )
+
+
+def test_unit_variance_fallback_still_judges_the_rows_that_vary():
+    # Row-wise, not whole-output: one flat row must not blind the property to the
+    # rest, and must not be judged either -- that would fail this correct output.
+    x = np.array([[5.0, 5.0, 5.0, 5.0], [-9.0, -3.0, 4.0, 8.0]], dtype=np.float32)
+    y = _layernorm(x)
+    assert np.var(y[0]) == 0.0 and np.var(y[1]) != 0.0
+    result = RowsHaveUnitVariance().check(_row_with({"inp": x}, y))
+    assert result.verdict is Verdict.PASS
+
+
 def test_neither_layernorm_property_is_tolerance_free():
     # A float sum of n centered values is not exactly zero. Claiming otherwise would
     # inflate the tolerance-free count the project's sharpest claim rests on.
@@ -709,10 +803,37 @@ def test_neither_layernorm_property_is_tolerance_free():
     assert RowsHaveUnitVariance().tolerance_free is False
 
 
-def test_layernorm_properties_are_inconclusive_on_a_failed_execution():
-    for prop in (RowsHaveZeroMean(), RowsHaveUnitVariance()):
-        row = _row(WIDE, None, status=Status.LAUNCH_ERROR)
-        assert prop.check(row).verdict is Verdict.INCONCLUSIVE, prop.name
+@pytest.mark.parametrize("cls", [RowsHaveZeroMean, RowsHaveUnitVariance])
+def test_layernorm_properties_are_inconclusive_on_a_failed_execution(cls):
+    """The output is deliberately *present and correct*.
+
+    A row with no output is caught by the missing-output guard first, so it would
+    certify the status check without ever reaching it. An earlier version of this
+    test passed ``y=None`` and did exactly that: deleting the status check from
+    either property left the suite green.
+    """
+    row = _row(WIDE, _layernorm(WIDE), status=Status.LAUNCH_ERROR)
+    result = cls().check(row)
+    assert result.verdict is Verdict.INCONCLUSIVE
+    assert result.detail == f"status={Status.LAUNCH_ERROR!r}"
+
+
+@pytest.mark.parametrize("dtype", [np.int64, np.complex64])
+@pytest.mark.parametrize("cls", [RowsHaveZeroMean, RowsHaveUnitVariance])
+def test_layernorm_properties_are_inconclusive_on_a_non_real_float_output(cls, dtype):
+    """No eps to scale a bound by, and no real values to take a variance of.
+
+    An int output has no unit roundoff -- ``np.finfo`` rejects it outright -- and a
+    complex one would lose its imaginary part to the float64 cast, a wrong answer in
+    production and a ComplexWarning-turned-error here. Either way the row cannot be
+    judged, and FAIL would book a possibly-correct kernel as a caught bug.
+    """
+    y = (_layernorm(WIDE) * 2).astype(dtype)
+    if dtype is np.complex64:
+        y = y + np.complex64(1j)
+    result = cls().check(_row(WIDE, y))
+    assert result.verdict is Verdict.INCONCLUSIVE
+    assert result.detail == "exact dtype: test ratio undefined"
 
 
 def test_layernorm_properties_defer_non_finite_output():
