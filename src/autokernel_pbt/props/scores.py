@@ -143,10 +143,12 @@ class ScoreTable:
         """Persist every arm's results, replacing any scores already in `run_dir`.
 
         `corpus_fingerprint` is the identity of the execution table these verdicts
-        judged, taken from `ExecutionTable.corpus_fingerprint()`. Keyword-only with no
-        default on purpose: a default of `""` would mean every caller that forgot it
-        wrote a scores file that pairs with *any* table, which is the hole this column
-        exists to close.
+        judged: the fingerprint `ExecutionTable.read_with_fingerprint()` returned with
+        the very rows that were scored. Not a fresh `corpus_fingerprint()` call -- that
+        is a second read, and after a concurrent re-record it names the corpus on disk
+        rather than the one judged. Keyword-only with no default on purpose: a default
+        of `""` would mean every caller that forgot it wrote a scores file that pairs
+        with *any* table, which is the hole this column exists to close.
 
         Every check runs, and every record is built, before the filesystem is
         touched: this module is offline scoring, so a rejected call costs a
@@ -236,6 +238,24 @@ class ScoreTable:
                 f"judged, because the case group is the unit at which arms are comparable"
             )
             raise ValueError(msg)
+        # The write side of two refusals `_result` makes on read. Without them a row
+        # `read` refuses is written cleanly and *replaces* the previous scores, leaving
+        # a file that is permanently unreadable -- the failure `write` already rejects
+        # a nan `elapsed_s` for, reached by a different field.
+        if not isinstance(result.case_id, str):
+            msg = (
+                f"arm {arm.arm!r} result {result.property_name!r} carries "
+                f"case_id={result.case_id!r}; it must be a str, '' on a group-scoped "
+                f"verdict, or the row is written and then refused by every read"
+            )
+            raise TypeError(msg)
+        if not isinstance(result.verdict, Verdict):
+            msg = (
+                f"arm {arm.arm!r} result {result.property_name!r} carries "
+                f"verdict={result.verdict!r}, which is not a Verdict member; only a "
+                f"member's value is guaranteed to reconstruct on read"
+            )
+            raise TypeError(msg)
         record = {
             "arm": arm.arm,
             # Deliberately not coerced with `float()`: the float64 column already
@@ -276,10 +296,21 @@ class ScoreTable:
         orphan that joins to nothing and puts a `None` in a column declared
         `str`, where a downstream `.startswith` becomes an AttributeError.
         """
+        return self.read_with_fingerprint()[0]
+
+    def read_with_fingerprint(self) -> tuple[list[ArmScores], str]:
+        """`read()` and the corpus fingerprint those arms carry, from ONE read.
+
+        The read `driver.read_run` pairs against the execution table. A separate
+        `corpus_fingerprint()` call reads the file again, and a re-score landing in
+        between makes the stamp describe scores other than the ones returned.
+        `([], "")` if the run has no scores.
+        """
         if not self.scores_path.exists():
-            return []
+            return [], ""
         table = pq.read_table(self.scores_path)
         self._require_columns(table.schema.names)
+        fingerprint = self._fingerprint_of(table)
 
         grouped: dict[str, ArmScores] = {}
         for record in table.to_pylist():
@@ -301,7 +332,7 @@ class ScoreTable:
                 )
                 raise ValueError(msg)
             arm.results.append(self._result(record))
-        return list(grouped.values())
+        return list(grouped.values()), fingerprint
 
     def _result(self, record: dict[str, Any]) -> PropertyResult:
         """Rebuild one `PropertyResult`, refusing a row that lost an invariant."""
@@ -357,6 +388,9 @@ class ScoreTable:
             return ""
         table = pq.read_table(self.scores_path)
         self._require_columns(table.schema.names)
+        return self._fingerprint_of(table)
+
+    def _fingerprint_of(self, table: pa.Table) -> str:
         distinct = sorted(set(table.column("corpus_fingerprint").to_pylist()))
         if not distinct:
             return ""

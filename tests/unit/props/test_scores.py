@@ -16,6 +16,8 @@ Two things every persisted row carries, and both are load-bearing:
   passed in rather than defaulted, so the tests here name one explicitly.
 """
 
+from dataclasses import replace
+
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -543,6 +545,51 @@ def test_both_keys_together_are_the_normal_case_scoped_row(tmp_path):
     assert read_back.group_id == "g0"
 
 
+def _with_raw_verdict(result: PropertyResult, verdict: str) -> PropertyResult:
+    object.__setattr__(result, "verdict", verdict)
+    return result
+
+
+def _unreadable_rows() -> dict[str, tuple[PropertyResult, str]]:
+    """Rows `write` used to accept and `read` refuses, each with its own write-side guard.
+
+    The failure mode is the one `write` already rejects a nan `elapsed_s` for: the
+    write succeeds, *replaces* the previous scores, and the file is then permanently
+    unreadable -- so a bad call costs the scores that were there before it.
+    """
+    return {
+        # A null case_id is refused on read ("null case_id"); "" is the legitimate value.
+        "a_none_case_id": (
+            replace(_case_result("c0"), case_id=None),
+            r"^arm 'reference' result 'finite_outputs' carries case_id=None; it must be a str",
+        ),
+        # The enum *name*, not its value: `str("PASS")` is written, `Verdict("PASS")`
+        # does not exist, and the read raises. `PropertyResult` now refuses this at
+        # construction (`verdict.py`), so it is planted after construction -- the
+        # route a frozen dataclass still leaves open, and the one this guard is for.
+        "a_verdict_that_is_not_a_member": (
+            _with_raw_verdict(_case_result("c0"), "PASS"),
+            (
+                r"^arm 'reference' result 'finite_outputs' carries verdict='PASS', "
+                r"which is not a Verdict member"
+            ),
+        ),
+    }
+
+
+@pytest.mark.parametrize("name", sorted(_unreadable_rows()))
+def test_a_row_read_would_refuse_is_refused_at_write(tmp_path, name):
+    bad, expected = _unreadable_rows()[name]
+    run = tmp_path / "run"
+    _write(run, [ArmScores(arm="reference", elapsed_s=1.0, results=[_case_result("c0")])])
+
+    with pytest.raises(TypeError, match=expected):
+        _write(run, [ArmScores(arm="reference", elapsed_s=2.0, results=[bad])])
+
+    # Refused before the file was touched, so the previous scores are still readable.
+    assert [(arm.arm, arm.elapsed_s) for arm in ScoreTable(run).read()] == [("reference", 1.0)]
+
+
 def test_an_attribution_failure_names_the_arm_and_the_property(tmp_path):
     run = tmp_path / "run"
     orphan = PropertyResult(
@@ -758,3 +805,53 @@ def test_the_schema_check_is_the_shared_one_from_the_execution_table():
     from autokernel_pbt.props import scores, table
 
     assert scores._conform is table._conform
+
+
+def test_one_read_returns_the_arms_and_the_fingerprint_they_carry(tmp_path):
+    """The pair `read_run` compares must come from the read whose arms it returns.
+
+    `corpus_fingerprint()` is a second read; between the two a re-score can land, and
+    the stamp then describes scores other than the ones in hand.
+    """
+    run = tmp_path / "run"
+    _write(run, [ArmScores(arm="reference", elapsed_s=1.0, results=[_case_result("c0")])])
+
+    arms, fingerprint = ScoreTable(run).read_with_fingerprint()
+    assert [arm.arm for arm in arms] == ["reference"]
+    assert fingerprint == CORPUS
+    assert ScoreTable(tmp_path / "nope").read_with_fingerprint() == ([], "")
+
+
+def test_the_paired_read_opens_the_score_file_once(tmp_path, monkeypatch):
+    """A `read()` beside a `corpus_fingerprint()` is two reads, and a re-score between
+    them makes the stamp describe scores other than the ones returned."""
+    run = tmp_path / "run"
+    _write(run, [ArmScores(arm="reference", elapsed_s=1.0, results=[_case_result("c0")])])
+    original = pq.read_table
+    opened: list[str] = []
+
+    def read_table(source, *args, **kwargs):
+        opened.append(str(source))
+        return original(source, *args, **kwargs)
+
+    monkeypatch.setattr(pq, "read_table", read_table)
+    ScoreTable(run).read_with_fingerprint()
+    assert opened == [str(run / SCORES_FILE)]
+
+
+def test_the_paired_read_refuses_a_file_holding_two_corpora(tmp_path):
+    run = tmp_path / "run"
+    _write(
+        run,
+        [
+            ArmScores(
+                arm="reference",
+                elapsed_s=1.0,
+                results=[_case_result("c0"), _case_result("c1")],
+            )
+        ],
+    )
+    _patch_column(run, "corpus_fingerprint", ["aaa", "bbb"], pa.string())
+
+    with pytest.raises(ValueError, match=r"carries 2 different corpus fingerprints"):
+        ScoreTable(run).read_with_fingerprint()

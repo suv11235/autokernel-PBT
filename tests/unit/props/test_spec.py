@@ -48,6 +48,48 @@ def test_spec_normalizes_shape_to_ints():
     assert all(type(d) is int for d in spec.shape)
 
 
+@pytest.mark.parametrize("field", ["seed", "group_index"])
+def test_spec_normalizes_numpy_integer_scalars_to_int(field):
+    """The same gap as ``shape``, one field over, and it is reachable from a sweep.
+
+    ``for seed in np.arange(5): run_task(seed=seed, ...)`` handed an ``np.int64`` to
+    every spec. Construction accepted it, every case executed on the backend, and
+    the run then died in ``to_json`` -- persistence, after the hardware was paid for.
+    """
+    fields = {"seed": 1, "group_index": 0, field: np.int64(3)}
+    spec = CaseSpec(task_id="t", shape=(2,), transforms=(), **fields)
+    assert type(getattr(spec, field)) is int
+    assert getattr(spec, field) == 3
+    assert CaseSpec.from_json(spec.to_json()) == spec
+
+
+@pytest.mark.parametrize("flag", [True, np.True_], ids=["bool", "np.bool_"])
+@pytest.mark.parametrize("field", ["seed", "group_index"])
+def test_spec_rejects_a_bool_where_an_integer_belongs(field, flag):
+    """``bool`` is an ``int`` subclass, so ``operator.index(True)`` is a silent ``1``.
+
+    A flag landing in ``seed`` is a mis-wired call, and accepting it would record a
+    run under seed 1 that nobody asked for. ``np.bool_`` is refused by the same rule
+    rather than left to numpy's DeprecationWarning, which this suite turns into an
+    error with a message naming neither the field nor the spec.
+    """
+    fields = {"seed": 1, "group_index": 0, field: flag}
+    with pytest.raises(TypeError, match=rf"^CaseSpec\.{field} must be an integer, not a bool"):
+        CaseSpec(task_id="t", shape=(2,), transforms=(), **fields)
+
+
+@pytest.mark.parametrize("value", [1.0, "1"], ids=["float", "str"])
+@pytest.mark.parametrize("field", ["seed", "group_index"])
+def test_spec_rejects_a_non_integer_seed_or_group_index(field, value):
+    # `int()` would truncate 1.5 and parse "1"; `operator.index` accepts only values
+    # that *are* integers, which is the contract the fields are declared with.
+    fields = {"seed": 1, "group_index": 0, field: value}
+    with pytest.raises(
+        TypeError, match=rf"^CaseSpec\.{field} must be an integer, got {value!r} of type"
+    ):
+        CaseSpec(task_id="t", shape=(2,), transforms=(), **fields)
+
+
 def test_spec_rejects_a_negative_group_index():
     with pytest.raises(ValueError, match="group_index must be non-negative"):
         CaseSpec(seed=1, task_id="t", group_index=-1, shape=(2,), transforms=())

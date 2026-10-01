@@ -125,7 +125,8 @@ def _keyed_by_group(
 
     A case id with no recorded row is left alone rather than raising here; that is
     ``_verify_join``'s finding to report, and reporting it from two places would let one
-    guard's saboteur certify the other's.
+    guard's saboteur certify the other's. So is a result that already carries a group
+    other than its case's, and one carrying neither key.
     """
     return [
         replace(result, group_id=group_of_case[result.case_id])
@@ -145,12 +146,18 @@ def _verify_join(recorded: list[ExecutionResult], scored: list[ArmScores]) -> No
     message that names which one fired — a shared message would let one guard's saboteur
     silently certify another's.
 
+    0. Every score carries at least one key. A verdict with neither joins no row and
+       names no group; it used to escape as a bare ``KeyError('')`` from the grouping
+       below, naming neither the arm nor the property.
     1. Every ``case_id`` a score carries is a recorded case. Catches a mistyped id and a
        scores file copied in from another run, both of which orphan silently: the
        affected rows drop out of the numerator and the denominator is computed anyway.
     2. Every ``group_id`` a score carries is a recorded group. Separate from (1) because
        a result carries exactly one of the two, so a check on cases alone is blind to
        every group-scoped verdict — which is where the metamorphic detections live.
+    2b. A score carrying both keys files its case under the case's own group. Both ids
+       can be real and the pair still wrong; rolled up by ``group_id``, the verdict then
+       counts against a group whose rows it never judged.
     3. Every arm covered every recorded group. This is the one the other two cannot see:
        an arm that scored three groups of nine emits nothing but valid ids and yields a
        rate over a denominator of three. Coverage is asserted per *arm*, not over the
@@ -166,6 +173,21 @@ def _verify_join(recorded: list[ExecutionResult], scored: list[ArmScores]) -> No
     recorded_groups = {row.case.group_id for row in recorded}
 
     for arm in scored:
+        unkeyed = sorted(
+            {
+                result.property_name
+                for result in arm.results
+                if not result.case_id and not result.group_id
+            }
+        )
+        if unkeyed:
+            msg = (
+                f"arm {arm.arm!r} produced result(s) carrying neither case_id nor group_id, "
+                f"for property(ies) {unkeyed}; such a verdict joins no recorded row and "
+                f"names no group, so it can be attributed to nothing"
+            )
+            raise ValueError(msg)
+
         unknown_cases = sorted(
             {result.case_id for result in arm.results if result.case_id} - group_of_case.keys()
         )
@@ -185,6 +207,25 @@ def _verify_join(recorded: list[ExecutionResult], scored: list[ArmScores]) -> No
                 f"arm {arm.arm!r} produced scores carrying group_id(s) that no recorded row "
                 f"carries: {unknown_groups}. The scores do not join the execution table, so "
                 f"every rate computed from the pair would silently drop them"
+            )
+            raise ValueError(msg)
+
+        # Both ids are known by now, so `group_of_case[...]` cannot miss.
+        misfiled = sorted(
+            {
+                (result.case_id, result.group_id, group_of_case[result.case_id])
+                for result in arm.results
+                if result.case_id
+                and result.group_id
+                and result.group_id != group_of_case[result.case_id]
+            }
+        )
+        if misfiled:
+            msg = (
+                f"arm {arm.arm!r} files case_id(s) under a group their recorded row does "
+                f"not belong to, as (case_id, claimed group, recorded group): {misfiled}. "
+                f"Rolled up by group_id, each verdict would count against a group whose "
+                f"rows it never judged"
             )
             raise ValueError(msg)
 
@@ -252,18 +293,31 @@ def read_run(run_dir: Path | str) -> tuple[list[ExecutionResult], list[ArmScores
     something other than the driver, and in both cases "cannot tell" must not read as
     "fine".
 
+    The fingerprints compared are the ones carried by the rows and arms *returned*,
+    each taken from the same read as what it describes. Re-reading either file to get
+    its stamp would verify a pair other than the one handed back: a re-record and
+    re-score landing between the two reads used to return the old rows with the new
+    scores, certified because the two new files agree.
+
+    Scores with no execution table beside them are refused too. They judged a corpus
+    that is no longer on disk, and a caller reading only the arms -- ``metrics.rates``
+    does -- would otherwise compute a rate with nothing behind it.
+
     Returns ``(rows, arms)``. A run with a table but no scores yet is not an error and
     returns ``(rows, [])``; a run with neither returns ``([], [])``.
     """
-    table = ExecutionTable(run_dir)
-    scores = ScoreTable(run_dir)
-    rows = table.read()
-    arms = scores.read()
+    rows, recorded = ExecutionTable(run_dir).read_with_fingerprint()
+    arms, judged = ScoreTable(run_dir).read_with_fingerprint()
     if not arms:
         return rows, arms
 
-    recorded = table.corpus_fingerprint()
-    judged = scores.corpus_fingerprint()
+    if not rows:
+        msg = (
+            f"run {Path(run_dir)} has scores but no execution table to pair them with: "
+            f"they judged corpus {judged!r}, and no recorded row is on disk. A rate from "
+            f"them would describe executions nobody can inspect"
+        )
+        raise ValueError(msg)
     if not recorded or not judged:
         msg = (
             f"run {Path(run_dir)} has scores that cannot be paired with its execution "
@@ -393,9 +447,10 @@ def run_task(
     # The replayed corpus. Read once, scored by every arm, so "both arms saw the same
     # rows" is true by construction rather than by comparison — and so that in-memory
     # interference between arms stays *detectable* (a fresh read per arm would give each
-    # arm its own throwaway copy to scribble on).
-    table = ExecutionTable(run_dir)
-    recorded = table.read_groups()
+    # arm its own throwaway copy to scribble on). The fingerprint comes from the same
+    # read: it is the identity of *these* rows, whatever is on disk by the time the
+    # scores are written.
+    recorded, fingerprint = ExecutionTable(run_dir).read_groups_with_fingerprint()
     rows = [row for group_rows in recorded.values() for row in group_rows]
     group_of_case = {row.case.case_id: row.case.group_id for row in rows}
 
@@ -457,6 +512,8 @@ def run_task(
     # unrelated to the data, and any diff or fingerprint of the two sees noise.
     scored.sort(key=lambda arm: ARM_NAMES.index(arm.arm))
     _verify_join(rows, scored)
-    # The identity is read back off the table rather than minted here, so the scores can
-    # only ever claim the corpus that is actually on disk beside them.
-    ScoreTable(run_dir).write(scored, corpus_fingerprint=table.corpus_fingerprint())
+    # The identity of the corpus the arms judged, from the read that produced it — not
+    # a second read of the table now. A re-record landing during scoring would make a
+    # second read name *its* corpus, and these scores would then pair with executions
+    # they never saw. Stamped this way they pair with nothing, which `read_run` reports.
+    ScoreTable(run_dir).write(scored, corpus_fingerprint=fingerprint)

@@ -37,7 +37,13 @@ from autokernel_pbt.props.backends.numpy_backend import NumpyBackend
 from autokernel_pbt.props.contract import CONTRACT_FILENAME, KERNEL_TASKS_DIR
 from autokernel_pbt.props.driver import ARM_NAMES, arm_order, read_run, run_task
 from autokernel_pbt.props.generator import Generator
-from autokernel_pbt.props.oracle import REFERENCE_PROPERTY, DeclarativeOracle, ReferenceOracle
+from autokernel_pbt.props.oracle import (
+    REFERENCE_PROPERTY,
+    AllcloseOracle,
+    DeclarativeOracle,
+    HybridOracle,
+    ReferenceOracle,
+)
 from autokernel_pbt.props.properties import RowsSumToOne, ShiftInvariance
 from autokernel_pbt.props.scores import SCORES_FILE, ArmScores, ScoreTable
 from autokernel_pbt.props.table import ExecutionTable
@@ -208,21 +214,28 @@ def test_both_arms_score_the_same_recorded_corpus(
     assert set(reference.values()) == {Verdict.PASS}, reference
     assert set(declarative.values()) == {Verdict.PASS}, declarative
 
-    # Phase two: one perturbed read, and both arms must show it.
-    original = ExecutionTable.read_groups
+    # Phase two: one perturbed read, and every arm must show it.
+    #
+    # Only the FIRST read is perturbed, and at `read_with_fingerprint`, which every
+    # read path goes through. An earlier version perturbed *every* `read_groups` call,
+    # which certified nothing about sharing: an arm handed a fresh read of its own saw
+    # the same NaNs, and only two of the four arms were checked at all.
+    original = ExecutionTable.read_with_fingerprint
+    reads = {"n": 0}
 
-    def read_groups(self: ExecutionTable) -> dict[str, list[Any]]:
-        groups = original(self)
-        for rows in groups.values():
+    def read_with_fingerprint(self: ExecutionTable) -> tuple[list[Any], str]:
+        rows, fingerprint = original(self)
+        reads["n"] += 1
+        if reads["n"] == 1:
             for row in rows:
                 row.outputs = {
                     name: np.full_like(array, np.nan) for name, array in row.outputs.items()
                 }
-        return groups
+        return rows, fingerprint
 
-    monkeypatch.setattr(ExecutionTable, "read_groups", read_groups)
+    monkeypatch.setattr(ExecutionTable, "read_with_fingerprint", read_with_fingerprint)
     perturbed = drive(tmp_path / "perturbed", correct_softmax, "correct_softmax", False, repo_root)
-    for arm in (ReferenceOracle.name, DeclarativeOracle.name):
+    for arm in ARM_NAMES:
         assert fail_rate(perturbed, arm) == 1.0, (
             f"{arm} did not score the rows the single read returned; it scored some other "
             f"corpus, so the arms are not provably sharing one"
@@ -390,6 +403,39 @@ def _partial_coverage() -> Callable[[list[PropertyResult]], list[PropertyResult]
     return sabotage
 
 
+def _misfiled_case() -> Callable[[list[PropertyResult]], list[PropertyResult]]:
+    """File one case-scoped verdict under a *different* recorded group.
+
+    Both ids are real and coverage is untouched, so the two unknown-id checks and the
+    coverage check all pass; the verdict is simply rolled up against a group whose
+    rows it never judged. ``_keyed_by_group`` leaves a result alone once it carries a
+    group, so nothing re-derived the group from the case.
+    """
+    state: dict[str, Any] = {"first_group": None, "done": False}
+
+    def sabotage(results: list[PropertyResult]) -> list[PropertyResult]:
+        group = next(r.group_id for r in results if r.group_id)
+        if state["first_group"] is None:
+            state["first_group"] = group
+            return results
+        if state["done"] or group == state["first_group"]:
+            return results
+        state["done"] = True
+        index = next(i for i, r in enumerate(results) if r.case_id)
+        misfiled = replace(results[index], group_id=state["first_group"])
+        return [*results[:index], misfiled, *results[index + 1 :]]
+
+    return sabotage
+
+
+def _unkeyed(results: list[PropertyResult]) -> list[PropertyResult]:
+    """A verdict carrying neither key. It escaped as a bare ``KeyError('')``."""
+    orphan = PropertyResult(
+        property_name="finite_outputs", tier=1, tolerance_free=True, verdict=Verdict.PASS
+    )
+    return [*results, orphan]
+
+
 #: Each saboteur paired with the message its own guard must produce. Pairing is what
 #: makes these pin individual guards rather than "something raised": the unique-catcher
 #: invariant this repo learned three times over. The first element is a *factory*
@@ -410,6 +456,14 @@ JOIN_SABOTEURS = {
     "the_arm_establishes_nothing_anywhere": (
         lambda: _all_inconclusive,
         r"summarizes to INCONCLUSIVE on every one of",
+    ),
+    "a_case_is_filed_under_another_group": (
+        _misfiled_case,
+        r"files case_id\(s\) under a group their recorded row does not belong to",
+    ),
+    "a_result_carries_neither_key": (
+        lambda: _unkeyed,
+        r"carrying neither case_id nor group_id, for property\(ies\) \['finite_outputs'\]",
     ),
 }
 
@@ -518,6 +572,92 @@ def test_a_clean_run_is_not_refused(tmp_path: Path, repo_root: Path):
     rows, arms = read_run(run_dir)
     assert rows and arms
     assert ExecutionTable(run_dir).corpus_fingerprint() == ScoreTable(run_dir).corpus_fingerprint()
+
+
+def _record_corpus(run_dir: Path, kernel: Callable[..., np.ndarray]) -> None:
+    """Record SEED's corpus into ``run_dir`` with ``kernel``, unscored: a re-record."""
+    backend = NumpyBackend()
+    ExecutionTable(run_dir).write(
+        [
+            backend.run(kernel, case)
+            for group in Generator(SOFTMAX.domain, SEED).generate(ALL_SHAPES)
+            for case in group.cases
+        ]
+    )
+
+
+def test_scores_are_stamped_with_the_corpus_the_arms_judged(
+    tmp_path: Path, monkeypatch, repo_root: Path
+):
+    """A re-record landing mid-scoring must leave scores that refuse to pair.
+
+    The driver used to stamp the scores with a *second* read of the table, taken after
+    scoring -- so scores judging the correct kernel's corpus claimed the broken
+    kernel's re-recorded one, and ``read_run`` paired them: a 0.0 detection rate on a
+    table labelled broken. The stamp must name the corpus the arms were handed.
+    """
+    run_dir = tmp_path / "run"
+    fired: list[bool] = []
+
+    def hooked(cls: type) -> Callable[..., list[PropertyResult]]:
+        original = cls.evaluate
+
+        def evaluate(self, rows):
+            if not fired:
+                fired.append(True)
+                _record_corpus(run_dir, unnormalized_softmax)
+            return original(self, rows)
+
+        return evaluate
+
+    for cls in (AllcloseOracle, ReferenceOracle, DeclarativeOracle, HybridOracle):
+        monkeypatch.setattr(cls, "evaluate", hooked(cls))
+    drive(run_dir, correct_softmax, "correct_softmax", False, repo_root)
+    assert fired, "the re-record never ran; this proves nothing"
+
+    with pytest.raises(ValueError, match="different runs"):
+        read_run(run_dir)
+
+
+def test_read_run_compares_the_fingerprints_of_what_it_returns(
+    tmp_path: Path, monkeypatch, repo_root: Path
+):
+    """A re-record and re-score landing between ``read_run``'s two reads.
+
+    It used to verify the pairing with a second read of each file, so it returned the
+    OLD rows with the NEW scores and certified them, because the two NEW files agree.
+    The comparison must be between the stamps of the rows and arms it hands back.
+    """
+    run_dir = drive(
+        tmp_path / "run", unnormalized_softmax, "unnormalized_softmax", True, repo_root
+    )
+    original = pq.read_table
+    fired: list[bool] = []
+
+    def read_table(source, *args, **kwargs):
+        if not fired and Path(source).name == SCORES_FILE:
+            fired.append(True)
+            drive(run_dir, correct_softmax, "correct_softmax", False, repo_root)
+        return original(source, *args, **kwargs)
+
+    monkeypatch.setattr(pq, "read_table", read_table)
+    with pytest.raises(ValueError, match="different runs"):
+        read_run(run_dir)
+    assert fired, "the re-score never ran; this proves nothing"
+
+
+def test_scores_whose_execution_table_is_gone_are_refused(tmp_path: Path, repo_root: Path):
+    """Scores present, table lost: the scores judged a corpus that is no longer there.
+
+    ``metrics.rates`` reads only the arms ``read_run`` returns, so returning
+    ``([], arms)`` here would compute a rate with no execution table behind it.
+    """
+    run_dir = drive(tmp_path / "run", correct_softmax, "correct_softmax", False, repo_root)
+    (run_dir / "rows.parquet").unlink()
+    shutil.rmtree(run_dir / "tensors")
+
+    with pytest.raises(ValueError, match=r"has scores but no execution table to pair them with"):
+        read_run(run_dir)
 
 
 def test_a_run_with_no_scores_yet_pairs_without_complaint(tmp_path: Path, repo_root: Path):
@@ -694,6 +834,51 @@ def test_arm_order_is_driven_by_its_own_seed_not_the_corpus_seed(
         arm_order_seed=7,
     )
     assert seen == [7], f"arm_order received {seen}, not the arm_order_seed"
+
+
+def test_the_arms_are_evaluated_in_the_order_arm_order_chose(
+    tmp_path: Path, repo_root: Path, monkeypatch
+):
+    """The wiring test above checks the seed reaches ``arm_order``; this checks the
+    *result* is used. A driver that computed the order and then evaluated in
+    ``ARM_NAMES`` order passed every other test here, because scores are persisted in
+    canonical order and the evaluation order leaves no trace on disk.
+
+    Only top-level ``evaluate`` calls are recorded: the hybrid arm calls the
+    declarative and reference oracles internally, and those are not arm evaluations.
+    """
+    order_seed = next(s for s in range(100) if arm_order(s) != list(ARM_NAMES))
+    calls: list[str] = []
+    depth = {"n": 0}
+
+    def recorded(cls: type) -> Callable[..., list[PropertyResult]]:
+        original = cls.evaluate
+
+        def evaluate(self, rows):
+            if depth["n"] == 0 and (not calls or calls[-1] != self.name):
+                calls.append(self.name)
+            depth["n"] += 1
+            try:
+                return original(self, rows)
+            finally:
+                depth["n"] -= 1
+
+        return evaluate
+
+    for cls in (AllcloseOracle, ReferenceOracle, DeclarativeOracle, HybridOracle):
+        monkeypatch.setattr(cls, "evaluate", recorded(cls))
+    run_task(
+        task=SOFTMAX,
+        kernel=correct_softmax,
+        reference_fn=softmax_reference,
+        run_dir=tmp_path / "run",
+        repo_root=repo_root,
+        n_groups=ALL_SHAPES,
+        seed=SEED,
+        kernel_id="k",
+        arm_order_seed=order_seed,
+    )
+    assert calls == arm_order(order_seed), f"evaluated {calls}, arm_order chose {arm_order(order_seed)}"
 
 
 def test_arm_order_defaults_to_the_corpus_seed(tmp_path: Path, repo_root: Path, monkeypatch):
