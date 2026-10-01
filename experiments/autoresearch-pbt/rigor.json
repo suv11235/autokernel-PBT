@@ -1,0 +1,83 @@
+{
+  "baseline": {
+    "mean_val_bpb": 2.82866,
+    "sd": 0.01037,
+    "min": 2.82107,
+    "max": 2.84048,
+    "n": 3,
+    "mean_steps": 1174.3,
+    "mean_tok_per_s": 40071.6,
+    "values": [
+      2.824428,
+      2.840476,
+      2.82107
+    ],
+    "seeds": [
+      0,
+      1,
+      2
+    ],
+    "note": "paired sweep, all candidates run back-to-back"
+  },
+  "r5_muon_lr": {
+    "mean_val_bpb": 2.24471,
+    "sd": 0.01119,
+    "min": 2.2341,
+    "max": 2.25639,
+    "n": 3,
+    "mean_steps": 1474.3,
+    "mean_tok_per_s": 50311.8,
+    "values": [
+      2.234099,
+      2.243642,
+      2.256395
+    ],
+    "seeds": [
+      0,
+      1,
+      2
+    ],
+    "note": "paired sweep, all candidates run back-to-back"
+  },
+  "r6_wd_rescaled": {
+    "mean_val_bpb": 2.24724,
+    "sd": 0.0196,
+    "min": 2.23025,
+    "max": 2.26869,
+    "n": 3,
+    "mean_steps": 1547.3,
+    "mean_tok_per_s": 52806.5,
+    "values": [
+      2.242786,
+      2.230246,
+      2.268686
+    ],
+    "seeds": [
+      0,
+      1,
+      2
+    ],
+    "note": "paired sweep, all candidates run back-to-back"
+  },
+  "r6_best_nolrmult": {
+    "mean_val_bpb": 2.22801,
+    "sd": 0.0147,
+    "min": 2.21397,
+    "max": 2.24328,
+    "n": 3,
+    "mean_steps": 1499.3,
+    "mean_tok_per_s": 51166.3,
+    "values": [
+      2.243281,
+      2.213967,
+      2.226787
+    ],
+    "seeds": [
+      0,
+      1,
+      2
+    ],
+    "note": "paired sweep, all candidates run back-to-back"
+  },
+  "_winner": "r6_best_nolrmult"
+}
