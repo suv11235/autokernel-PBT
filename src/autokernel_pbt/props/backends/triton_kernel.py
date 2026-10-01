@@ -27,8 +27,27 @@ from typing import Any
 import numpy as np
 
 from autokernel_pbt.props.backends.base import single_output
+from autokernel_pbt.props.backends.telemetry import MISSING, _Missing
 
 HASH_CHARS = 16
+
+
+def _source_of(fn: Any) -> str | None:
+    """The source text that defines `fn`, or None if none is readable.
+
+    A `@triton.jit` function is a `JITFunction` instance, on which `inspect.getsource`
+    raises TypeError. Its `.src` is the text Triton actually parses and compiles, so it
+    is preferred; `.fn` is the wrapped Python function, the next most faithful. Both
+    are probed rather than assumed, like every other piece of Triton introspection: a
+    release that drops one must degrade to the other, not abort a run.
+    """
+    src = getattr(fn, "src", None)
+    if isinstance(src, str):
+        return src
+    try:
+        return inspect.getsource(getattr(fn, "fn", fn))
+    except (OSError, TypeError):
+        return None
 
 
 class InputMutatedError(RuntimeError):
@@ -88,23 +107,25 @@ class TritonKernel:
         self._grid_used: tuple[int, ...] | None = None
 
     @property
-    def source_hash(self) -> str:
-        """Content identity of what will actually run.
+    def source_hash(self) -> str | _Missing:
+        """Content identity of what will actually run, or MISSING if unreadable.
 
         `kernel_id` is a label. Two runs must not be able to both call something
         `relu_triton` and mean different code, which would silently merge two
         variants' results into one number. Both the jit function and the launcher are
         hashed, because the launcher carries the block and stride arithmetic and a
         change there changes the kernel as surely as editing its body.
+
+        If either has no readable source the result is MISSING, never a hash of its
+        *name*: a name-hash looks exactly like an identity while two different bodies
+        share it. That is not hypothetical -- `inspect.getsource` raises on a
+        `JITFunction`, so until this read `.src`/`.fn` every recorded Triton hash
+        covered the launcher and the kernel's name, and editing a kernel body left it
+        unchanged. Runs recorded before the fix carry those hashes.
         """
-        material = []
-        for fn in (self.jit_fn, self.launcher):
-            try:
-                material.append(inspect.getsource(fn))
-            except (OSError, TypeError):
-                module = getattr(fn, "__module__", "?")
-                qualname = getattr(fn, "__qualname__", repr(fn))
-                material.append(f"{module}.{qualname}")
+        material = [_source_of(fn) for fn in (self.jit_fn, self.launcher)]
+        if any(text is None for text in material):
+            return MISSING
         digest = hashlib.sha256("\n".join(material).encode("utf-8"))
         return digest.hexdigest()[:HASH_CHARS]
 
@@ -124,6 +145,12 @@ class TritonKernel:
         # non-writeable array -- which this project turns into an error. The copy is
         # negligible next to a host-to-device transfer, and `base.readonly_inputs`
         # names this as Phase 3's hazard to solve.
+        # Per-call state is cleared FIRST. One adapter serves every case of its shape,
+        # so a call that fails before recording -- a compile failure for a new
+        # specialization, a grid callable that raises -- would otherwise report the
+        # previous call's artifact and geometry as its own.
+        self.compiled = None
+        self._grid_used = None
         writable = {name: np.array(value, copy=True) for name, value in inputs.items()}
         primary = next(iter(writable.values()))
         grid = tuple(self.grid(primary.shape, self.constexprs))

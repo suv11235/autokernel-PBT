@@ -169,7 +169,15 @@ def single_output(value: Any) -> np.ndarray:
             f"array-like output only (multi-output kernels are not supported yet)"
         )
         raise OutputContractError(msg)
-    array = np.asarray(value)
+    try:
+        array = np.asarray(value)
+    except Exception as exc:
+        # Whatever the conversion raises is a fact about what the kernel returned --
+        # a device tensor (TypeError), a ragged sequence (ValueError), an `__array__`
+        # that is simply broken. Re-raised as the contract type so every backend books
+        # it as OUTPUT_ERROR; letting it escape aborts the run it occurred in.
+        msg = f"kernel returned {type(value).__name__}, which cannot be converted to an array"
+        raise OutputContractError(msg) from exc
     if array.dtype.kind not in PERSISTABLE_KINDS:
         msg = (
             f"kernel returned dtype {array.dtype!r} (kind {array.dtype.kind!r}), "

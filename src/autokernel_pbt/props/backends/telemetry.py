@@ -24,7 +24,10 @@ MISSING rather than raising mid-run and discarding the executions already paid f
 from __future__ import annotations
 
 import hashlib
+import json
 from typing import Any
+
+import numpy as np
 
 #: Bump when a field is added or its meaning changes. Recorded on every row so a
 #: later reader can distinguish a run taken before a field existed from one where the
@@ -117,13 +120,49 @@ def probe(obj: Any, locations: tuple[str, ...]) -> Any:
     for location in locations:
         current: Any = obj
         for part in location.split("."):
-            if not hasattr(current, part):
+            # Not `hasattr`, which swallows only AttributeError: an attribute that
+            # lazily touches the driver can raise anything, and that is one location
+            # being unavailable, not a reason to abort the run.
+            try:
+                current = getattr(current, part)
+            except Exception:  # noqa: BLE001 - probed, not asserted
                 current = MISSING
                 break
-            current = getattr(current, part)
         if current is not MISSING:
             return current
     return MISSING
+
+
+def _table_encoding(obj: Any) -> Any:
+    """The execution table's encoding of non-JSON values, mirrored for a dry run.
+
+    Mirrors `table._json_safe` rather than importing it: the table imports this
+    module, and the schema must not depend on the persistence layer. Kept no more
+    permissive than the table, so whatever passes here also encodes there.
+    """
+    if isinstance(obj, np.generic):
+        return obj.item()
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    if obj is MISSING:
+        return None
+    msg = f"not encodable: {type(obj).__name__}"
+    raise TypeError(msg)
+
+
+def _encodable(value: Any) -> Any:
+    """`value` if the execution table can encode it, else MISSING.
+
+    Telemetry is JSON-encoded once, by the end-of-run table write -- after every
+    execution has been paid for. One value of an unexpected type from a new Triton or
+    torch release raised there and discarded the whole run. Checking at extraction
+    degrades that one field instead, which is the probed-not-asserted contract.
+    """
+    try:
+        json.dumps(value, default=_table_encoding)
+    except (TypeError, ValueError, OverflowError, RecursionError):
+        return MISSING
+    return value
 
 
 def _hash(text: Any) -> Any:
@@ -142,7 +181,8 @@ def extract(
     """Assemble one execution's telemetry.
 
     `device` and `launch` are merged verbatim -- the backend knows those and does not
-    need to probe for them. Everything off the compiled artifact is probed.
+    need to probe for them. Everything off the compiled artifact is probed. Any value
+    the execution table could not encode is recorded as MISSING; see `_encodable`.
 
     The PTX is hashed rather than stored. A large kernel's PTX is tens of kilobytes
     and would be repeated on every row of every group; the hash identifies the
@@ -163,4 +203,6 @@ def extract(
         out[key] = launch.get(key, MISSING)
     for key, default in _FLAG_DEFAULTS.items():
         out[key] = (flags or {}).get(key, default)
-    return out
+    # Every group, not only the probed one: a device query and a launch constexpr are
+    # just as able to hand back a type the table cannot encode, and fail just as late.
+    return {key: _encodable(value) for key, value in out.items()}

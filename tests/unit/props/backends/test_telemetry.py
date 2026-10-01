@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 from typing import ClassVar
 
+import numpy as np
 import pytest
 
 from autokernel_pbt.props.backends.telemetry import (
@@ -123,3 +124,47 @@ def test_the_fault_class_relevant_keys_are_declared(key):
     # These are the ISSTA taxonomy's device-only signals: register pressure, spills,
     # and the launch geometry a tile compiler chose. Losing one costs a hardware run.
     assert key in declared_keys()
+
+
+class _Opaque:
+    """A value JSON cannot encode -- what a new Triton or torch release might return."""
+
+
+def test_a_probed_value_the_table_cannot_encode_is_recorded_as_missing():
+    # Telemetry is encoded once, by the end-of-run table write. An unencodable value
+    # raised there, after every execution had been paid for, and took the whole run.
+    class _OddCompiled:
+        n_regs = _Opaque()
+
+    assert extract(_OddCompiled(), device={}, launch={})["n_regs"] is MISSING
+
+
+def test_a_device_value_the_table_cannot_encode_is_recorded_as_missing():
+    out = extract(_Compiled(), device={"device_name": _Opaque()}, launch={})
+    assert out["device_name"] is MISSING
+
+
+def test_an_encodable_numpy_value_is_kept_not_degraded():
+    # The table encodes numpy scalars itself; degrading them would throw away a real
+    # register count for no reason.
+    class _NumpyCompiled:
+        n_regs = np.int64(40)
+
+    out = extract(_NumpyCompiled(), device={}, launch={})
+    assert out["n_regs"] == 40
+    assert out["n_regs"] is not MISSING
+
+
+def test_a_probe_location_that_raises_is_treated_as_absent():
+    # `hasattr` swallows only AttributeError. A compiled-kernel property that lazily
+    # touches the driver can raise anything, and one field's location must not abort
+    # the run: the probe moves on to the next candidate.
+    class _Raising:
+        num_regs = 32
+
+        @property
+        def n_regs(self):
+            msg = "driver not initialized"
+            raise RuntimeError(msg)
+
+    assert probe(_Raising(), ("n_regs", "num_regs")) == 32
