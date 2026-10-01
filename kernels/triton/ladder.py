@@ -33,10 +33,14 @@ from autokernel_pbt.props.backends.triton_kernel import (
     device_digest,
 )
 
-#: Largest tile these kernels support. One program holds a whole row in registers, so
-#: a row wider than this needs a two-stage (multi-block) reduction, which is a
-#: different kernel and out of scope here -- the guard in `_launcher` refuses it
-#: rather than computing a wrong answer.
+#: Largest tile these kernels support, inclusive. One program holds a whole row in
+#: registers, so a row wider than this needs a two-stage (multi-block) reduction, which
+#: is a different kernel and out of scope here. `block_for` refuses such a row and
+#: `_launcher` refuses such a tile, rather than computing a wrong answer. The widest row
+#: in any task domain is tolerance_sweep's 16384 -- exactly at the cap.
+#:
+#: Does not apply to `_softmax_wide_kernel`, whose tile is set explicitly and whose
+#: launcher loops over the row; rows wider than one tile are its purpose.
 MAX_BLOCK = 16384
 
 
@@ -52,8 +56,19 @@ def block_for(n_cols: int) -> int:
     compiles one artifact per constexpr combination.
 
     Deriving it is also simply what a competent Triton kernel does.
+
+    Raises ValueError for a row whose tile would exceed `MAX_BLOCK`: a bad *call*,
+    raised at kernel construction -- before `Backend.run`, which would book it as the
+    kernel's LAUNCH_ERROR rather than the caller's mistake.
     """
-    return max(1 << (n_cols - 1).bit_length(), 1)
+    block = max(1 << (n_cols - 1).bit_length(), 1)
+    if block > MAX_BLOCK:
+        msg = (
+            f"n_cols={n_cols} needs BLOCK={block} > MAX_BLOCK={MAX_BLOCK}; these kernels "
+            f"hold a whole row in one tile, and a wider row needs a two-stage reduction"
+        )
+        raise ValueError(msg)
+    return block
 
 
 @triton.jit
@@ -151,6 +166,12 @@ def _launcher(jit_kernel):
         x = inputs["x"]
         cols = x.shape[-1]
         block = constexprs["BLOCK"]
+        if block > MAX_BLOCK:
+            # Unreachable through `block_for`, which refuses first; this catches a
+            # constexprs dict built by hand. `cols > block` below cannot see it,
+            # because a tile wide enough for the row passes that check.
+            msg = f"BLOCK={block} exceeds MAX_BLOCK={MAX_BLOCK}; see MAX_BLOCK"
+            raise ValueError(msg)
         if cols > block:
             # A bad *call*, not bad data: it can only come from a misconfigured
             # kernel, costs nothing to re-run, and the alternative is silent
