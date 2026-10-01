@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
-"""Fixed harness entrypoint for agent/test loops (spec 0001).
+"""Harness CLI over the feature 0001/0002 skeleton.
+
+Every stage passes and the benchmark numbers are placeholders: the kernel and
+reference paths are recorded, never loaded. The real pipeline is
+``autokernel_pbt.props.driver.run_task``.
 
 Usage:
-  python harness/bench.py --kernel kernels/triton/candidate.py \\
-      --reference kernels/triton/reference_relu.py --dry-run --json
+  python harness/bench.py --kernel path/to/candidate.py \\
+      --reference path/to/reference.py --dry-run --json
 """
 
 from __future__ import annotations
@@ -16,7 +20,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from autokernel_pbt.harness.runner import load_config, run_harness  # noqa: E402
+from autokernel_pbt.harness.runner import load_config, run_harness
 
 
 def main() -> int:
@@ -32,7 +36,10 @@ def main() -> int:
     parser.add_argument("--json", action="store_true", help="Emit HarnessResult JSON")
     args = parser.parse_args()
 
-    cfg = load_config(args.config)
+    try:
+        cfg = load_config(args.config)
+    except FileNotFoundError as exc:
+        parser.error(str(exc))  # exits 2 with usage, as `akpbt bench` does
     result = run_harness(
         args.kernel,
         args.reference,
