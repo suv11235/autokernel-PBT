@@ -14,8 +14,22 @@ from autokernel_pbt.schema import validate
 
 
 def load_config(path: Path | None) -> dict[str, Any]:
-    if path is None or not path.exists():
+    """The harness config at ``path``, or ``{}`` (the defaults) when ``path`` is None.
+
+    ``None`` is the only way to ask for the defaults. A path that does not exist is
+    refused rather than read as "no config": a mistyped ``--config`` would otherwise
+    run the default stages for someone who asked for different ones, and the result
+    would validate cleanly, so nothing downstream could tell.
+    """
+    if path is None:
         return {}
+    path = Path(path)
+    if not path.exists():
+        msg = (
+            f"config file {path} does not exist; pass no config to use the defaults, "
+            f"rather than a path that silently falls back to them"
+        )
+        raise FileNotFoundError(msg)
     return yaml.safe_load(path.read_text()) or {}
 
 
