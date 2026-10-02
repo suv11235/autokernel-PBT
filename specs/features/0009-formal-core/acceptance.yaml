@@ -1,0 +1,40 @@
+feature_id: "0009"
+feature_name: formal-core
+version: 1
+
+criteria:
+  - id: AN_HONEST_ATTEMPT_IS_CERTIFIED
+    description: an attempt whose spec, model, hypotheses, proof and axioms are all sound passes all six checks
+    check:
+      type: unit_test
+      test: tests/unit/formal/test_checks.py::test_an_honest_attempt_is_certified
+
+  - id: EACH_CHEAT_HAS_ONE_CATCHER
+    description: every cheating attempt is rejected by exactly the check it targets, and by no other
+    check:
+      type: unit_test
+      test: tests/unit/formal/test_checks.py::test_each_cheat_is_rejected_by_exactly_its_own_check
+
+  - id: NO_READING_FAILS_CLOSED
+    description: an attempt with no executable reading cannot be certified
+    check:
+      type: unit_test
+      test: tests/unit/formal/test_checks.py::test_an_attempt_without_executable_readings_is_not_certified
+
+  - id: AGENT_CODE_CANNOT_ABORT_OR_CORRUPT_THE_CHECKS
+    description: a reading that raises, returns a non-boolean, writes into its inputs or returns the wrong shape fails its own check and no other
+    check:
+      type: unit_test
+      test: tests/unit/formal/test_checks.py::test_misbehaving_agent_code_fails_only_its_own_check
+
+  - id: THE_HARNESS_OWNS_THE_TOLERANCE
+    description: closeness is budgeted at the kernel output's dtype and the input's accumulation length, whatever the spec computes in
+    check:
+      type: unit_test
+      test: tests/unit/formal/test_comparisons.py::test_the_budget_is_the_outputs_dtype_not_the_specs_arithmetic
+
+  - id: A_GROUND_THAT_CANNOT_JUDGE_IS_REFUSED
+    description: an empty hidden set, a hidden kernel never wrong beyond the rounding budget, a hidden kernel that fails to run, and a non-finite reference are each refused before any check runs
+    check:
+      type: unit_test
+      test: tests/unit/formal/test_ground.py::test_a_ground_that_cannot_judge_is_refused
