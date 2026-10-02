@@ -21,9 +21,12 @@ from autokernel_pbt.formal.attempt import Attempt, ProofCheck, Readings
 from autokernel_pbt.formal.comparisons import Comparisons
 from autokernel_pbt.formal.ground import CaseRecord, Ground, realize
 
-#: Samples each axiom's reading is checked on. An axiom false only on a set of measure zero slips
-#: through; one false on any positive fraction of its domain is caught with overwhelming odds.
-AXIOM_SAMPLES = 64
+#: Samples each axiom's reading is checked on. An axiom false on a fraction p of its sampling
+#: domain escapes with probability (1 - p) ** AXIOM_SAMPLES: 1.7% at p = 0.1%, 2.7e-4 at
+#: p = 0.2%, about 1e-18 at p = 1%. One false only on a set of measure zero is never caught —
+#: sampling cannot see it, and the bounded refutation is the only check that might. 4096 scalar
+#: evaluations cost milliseconds per axiom.
+AXIOM_SAMPLES = 4096
 
 _NO_READING = "no executable reading, so it fails closed"
 

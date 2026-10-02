@@ -134,6 +134,12 @@ def exp_is_linear(rng: np.random.Generator, cmp) -> bool:
     return cmp.close(np.exp(t), 1.0 + t)
 
 
+def false_on_a_fifth_of_a_percent(rng: np.random.Generator, cmp) -> bool:
+    """An axiom false on 0.2% of its domain. With the checks' fixed seed it first fails on its
+    270th sample, so it pins that C6 samples far more than a few dozen times."""
+    return bool(rng.random() >= 0.002)
+
+
 def an_approximation_is_exp(rng: np.random.Generator, cmp) -> bool:
     """An approximate exp stated as exact: off by 2e-6, as the fast-exp candidate is.
 
@@ -273,6 +279,14 @@ CHEATS = {
     "axiom_that_is_false": (
         lambda: (
             honest(axioms=(Axiom("exp_is_linear", frozenset({"exp"}), exp_is_linear),)),
+            ground(),
+        ),
+        Check.AXIOMS,
+        r"false on a sample",
+    ),
+    "axiom_false_on_a_fifth_of_a_percent_of_its_domain": (
+        lambda: (
+            honest(axioms=(Axiom("rarely_false", frozenset({"exp"}), false_on_a_fifth_of_a_percent),)),
             ground(),
         ),
         Check.AXIOMS,
