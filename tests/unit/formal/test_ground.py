@@ -52,18 +52,19 @@ GROUND = Ground(
 )
 
 
-def test_realize_records_the_whole_ladder_with_read_only_inputs():
+def test_realize_records_the_whole_ladder_with_read_only_arrays():
     """18 cases: nine rungs, each a base case and one shift_rows partner.
 
     Every record carries the reference, the kernel's output and every hidden kernel's, and
-    inputs no reading can write into — so one misbehaving reading cannot change what every
-    later check sees.
+    every array is read-only — so a reading that writes into one in the ordinary way raises
+    instead of changing what every later check sees.
     """
     records = realize(GROUND)
     assert len(records) == 18
     assert all(set(r.hidden) == set(HIDDEN) for r in records)
     assert all(r.kernel is not None for r in records)
-    assert not any(r.inputs["x"].flags.writeable for r in records)
+    arrays = [a for r in records for a in (r.inputs["x"], r.reference, r.kernel, *r.hidden.values())]
+    assert not any(a.flags.writeable for a in arrays)
 
 
 def test_a_kernel_under_proof_that_fails_is_recorded_not_refused():

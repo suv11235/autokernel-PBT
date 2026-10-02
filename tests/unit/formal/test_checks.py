@@ -329,6 +329,11 @@ def spec_answering_an_array(inputs, y, cmp):
     return np.ones(3, dtype=bool)
 
 
+def spec_writing_into_its_output(inputs, y, cmp):
+    y[...] = 0.0
+    return cmp.close(y, definition(inputs["x"]))
+
+
 #: Agent code misbehaving, the checks that must fail, and the message proving why.
 MISBEHAVIOR = {
     "model_raises": (
@@ -360,6 +365,14 @@ MISBEHAVIOR = {
         (HONEST.axioms[0],),
         {Check.SPEC_SOUNDNESS, Check.SPEC_COMPLETENESS},
         r"not a bool",
+    ),
+    # The reference and every hidden output are handed to the spec: a write must raise, not
+    # zero the reference that every later comparison is made against.
+    "spec_writes_into_its_output": (
+        Readings(spec_writing_into_its_output, model_of(correct), two_dimensional),
+        (HONEST.axioms[0],),
+        {Check.SPEC_SOUNDNESS, Check.SPEC_COMPLETENESS},
+        r"read-only",
     ),
     "hypotheses_raise": (
         Readings(spec_of(), model_of(correct), raising_hypotheses),

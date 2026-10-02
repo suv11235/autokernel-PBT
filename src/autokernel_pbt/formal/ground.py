@@ -45,10 +45,13 @@ class Ground:
 class CaseRecord:
     """One generated case, with every output a check may compare against.
 
-    ``inputs`` are read-only copies held in a read-only mapping, so a reading that writes into an
-    array, or rebinds a name, raises instead of silently changing what every later check sees.
-    ``kernel`` is ``None`` where the kernel under proof failed to run: there is nothing there for
-    a model to be faithful to.
+    Every array is a read-only copy, and ``inputs`` sit in a read-only mapping, so a reading that
+    writes into an array in the ordinary way, or rebinds a name, raises instead of silently
+    changing what every later check sees. Outputs matter as much as inputs here: the spec is
+    handed the reference and every hidden output, and the reference anchors every comparison
+    after it. Copies rather than flags on the kernels' own arrays, so a kernel that reuses an
+    output buffer is not broken on its next call. ``kernel`` is ``None`` where the kernel under
+    proof failed to run: there is nothing there for a model to be faithful to.
     """
 
     case_id: str
@@ -105,13 +108,14 @@ def realize(ground: Ground) -> tuple[CaseRecord, ...]:
     return tuple(records)
 
 
+def _read_only_copy(array: np.ndarray) -> np.ndarray:
+    copy = np.array(array, copy=True)
+    copy.flags.writeable = False
+    return copy
+
+
 def _read_only_copies(inputs: Mapping[str, np.ndarray]) -> dict[str, np.ndarray]:
-    copies = {}
-    for name, array in inputs.items():
-        copy = np.array(array, copy=True)
-        copy.flags.writeable = False
-        copies[name] = copy
-    return copies
+    return {name: _read_only_copy(array) for name, array in inputs.items()}
 
 
 def _reference(reference: Kernel, inputs: Mapping[str, np.ndarray], case: Case) -> np.ndarray:
@@ -122,11 +126,11 @@ def _reference(reference: Kernel, inputs: Mapping[str, np.ndarray], case: Case) 
     if expected.dtype.kind in "fc" and not np.all(np.isfinite(expected)):
         msg = f"the reference is non-finite on case {case.case_id!r}; it cannot anchor any check"
         raise ValueError(msg)
-    return expected
+    return _read_only_copy(expected)
 
 
 def _run(backend: NumpyBackend, kernel: Kernel, case: Case) -> np.ndarray | None:
     result = backend.run(kernel, case)
     if result.status != Status.OK or OUTPUT_NAME not in result.outputs:
         return None
-    return result.outputs[OUTPUT_NAME]
+    return _read_only_copy(result.outputs[OUTPUT_NAME])
