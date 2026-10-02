@@ -50,6 +50,7 @@ markers = [
   "gpu: requires CUDA GPU",
   "integration: cross-component tests",
   "spec: derived from specs/features acceptance criteria",
+  "formal: requires a formal toolchain (skipped when it is absent)",
 ]
 
 [tool.ruff]
