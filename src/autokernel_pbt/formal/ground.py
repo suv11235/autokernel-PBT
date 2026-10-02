@@ -87,7 +87,10 @@ def realize(ground: Ground) -> tuple[CaseRecord, ...]:
                         f"cannot use it"
                     )
                     raise ValueError(msg)
-                if not Comparisons.for_output(inputs, output.dtype).close(output, reference):
+                # At the reference's dtype — the task's precision — and never at whatever the
+                # hidden kernel returned: a correct float64 twin is "wrong" against float64's far
+                # tighter budget, and would then fail every honest spec for accepting it.
+                if not Comparisons.for_output(inputs, reference.dtype).close(output, reference):
                     never_wrong.discard(name)
                 hidden[name] = output
             kernel = _run(backend, ground.kernel, case)

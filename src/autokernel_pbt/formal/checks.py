@@ -145,8 +145,10 @@ def _spec_completeness(readings: Readings | None, cases: tuple[CaseRecord, ...])
         outputs = [*case.hidden.items()]
         if case.kernel is not None:
             outputs.append((_KERNEL_UNDER_PROOF, case.kernel))
+        # One budget for the case, at the reference's dtype, as `realize` judges "wrong" — so the
+        # spec is held to the same budget here as in soundness, whatever each output's dtype.
+        cmp = Comparisons.for_output(case.inputs, case.reference.dtype)
         for name, output in outputs:
-            cmp = Comparisons.for_output(case.inputs, output.dtype)
             if cmp.close(output, case.reference):
                 # Right here — a one-column softmax is 1.0 at any temperature — so there is
                 # nothing for the spec to reject on this case.

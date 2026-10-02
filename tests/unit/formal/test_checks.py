@@ -160,6 +160,18 @@ def test_an_honest_attempt_is_certified():
     assert certificate.certified
 
 
+def test_completeness_judges_wrong_at_the_tasks_precision():
+    """A float64 hidden kernel is right wherever it matches the task's float32 reference.
+
+    Rolling the rows is the identity on the single-row rungs, so there this kernel is right;
+    judged at its own float64 budget it would look wrong, the honest spec would accept it, and
+    an honest attempt would fail completeness for accepting a correct output.
+    """
+    rolled_in_float64 = {**HIDDEN, "rows_rolled_in_float64": lambda x: np.roll(definition(x), 1, 0)}
+    certificate = certify(HONEST, replace(ground(), hidden=rolled_in_float64))
+    assert failing_details(certificate) == {}
+
+
 def test_a_record_missing_a_check_is_not_a_certificate():
     """Six findings must be present, not merely none failing."""
     five = tuple(Finding(check, True, "") for check in Check if check is not Check.AXIOMS)

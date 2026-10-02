@@ -24,6 +24,12 @@ def uniform_fill(x: np.ndarray) -> np.ndarray:
     return np.full(x.shape, 1.0 / x.shape[-1], dtype=x.dtype)
 
 
+def correct_in_float64(x: np.ndarray) -> np.ndarray:
+    wide = np.asarray(x, dtype=np.float64)
+    e = np.exp(wide - np.max(wide, axis=-1, keepdims=True))
+    return e / np.sum(e, axis=-1, keepdims=True)
+
+
 def crashes(x: np.ndarray) -> np.ndarray:
     msg = "a hidden kernel that cannot run"
     raise RuntimeError(msg)
@@ -75,6 +81,12 @@ GROUND_DEFECTS = {
     "a_hidden_kernel_never_wrong": (
         lambda: replace(GROUND, hidden={**HIDDEN, "correct_twin": correct}),
         r"never wrong by more than the rounding budget",
+    ),
+    # Right at the task's precision, and wrong only against float64's far tighter budget: "wrong"
+    # is judged at the reference's dtype, never at whatever a hidden kernel returned.
+    "a_hidden_kernel_right_in_float64": (
+        lambda: replace(GROUND, hidden={**HIDDEN, "correct_in_float64": correct_in_float64}),
+        r"\['correct_in_float64'\] are never wrong by more than the rounding budget",
     ),
     "a_hidden_kernel_that_crashes": (
         lambda: replace(GROUND, hidden={**HIDDEN, "crashes": crashes}),
