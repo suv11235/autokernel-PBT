@@ -91,3 +91,29 @@ def test_a_kernel_that_writes_to_its_input_is_caught_on_device(torch_cuda, trito
     )
     with pytest.raises(InputMutatedError):
         kernel(x=np.ones((4, 8), dtype=np.float32))
+
+
+@pytest.mark.gpu
+def test_correct_variants_are_rejected_by_the_admission_gate():
+    """The false-positive population must be verified correct, not asserted correct.
+
+    A "correct variant" the gate admits is not a variant but a mutant -- and one
+    written for this population, ``layernorm_sumsq``, turned out to be exactly that.
+    See ``docs/measurements/2026-08-19-false-positive-rate.md``.
+    """
+    from autokernel_pbt.corpus.gate import admit
+    from autokernel_pbt.props.backends.triton_backend import TritonBackend
+    from autokernel_pbt.props.generator import Generator
+    from autokernel_pbt.props.tasks import REFERENCES, TASKS
+    from kernels.mutants.correct_variants import TASK_OF, VARIANTS, correct_variant
+
+    backend = TritonBackend()
+    for name in VARIANTS:
+        task = TASKS[TASK_OF[name]]
+        rows = [
+            backend.run(correct_variant(name, case.shape[-1]), case)
+            for group in Generator(task.domain, seed=0).generate(len(task.domain.shapes))
+            for case in group.cases
+        ]
+        verdict = admit(rows, reference_fn=REFERENCES[TASK_OF[name]])
+        assert verdict is not True, f"{name} was admitted as broken; it is not a correct variant"

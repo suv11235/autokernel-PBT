@@ -1,0 +1,25 @@
+\begin{abstract}
+An agent that optimizes compute kernels faces an objective whose two halves pull
+apart: many of the cheapest ways to make a kernel faster also make it wrong. The
+incorrect ``optimizations'' we timed run up to \sabSpeedNoDivide$\times$ faster
+than the correct kernel, and a constant-fill ``softmax'' runs \fillSpeedup$\times$
+faster \emph{and passes our own property gate}. The correctness gate is therefore
+half of the fitness function, and its calibration and completeness bound what a
+long-running agent can reach. We describe a harness with three layers: agent
+\emph{skills} that carry measured lessons across sessions and control what each
+sub-agent may see; \emph{property-based testing} over byte-identical replayed
+executions, which serves as a cheap and calibrated gate; and \emph{formal proof},
+which certifies that the gate's laws pin down the specification. Comparing four oracle
+strategies on NumPy and Triton (\gpuName), we find that they never disagree on
+\mutantsAdmitted{} mutants from three corpora; that the field-default \allclose
+rejects \fpAllcloseRate{} of correct-kernel groups while the others reject none,
+so an \allclose-gated loop cannot accept its own baseline; and that a
+property-gated loop improves validation bits-per-byte by \loopBpbGain\% at
+\loopTputGain\% higher throughput. We also show that the property bundles are
+incomplete: they admit \gapFamiliesTotal{} wrong kernels, which we characterize
+exactly and close with one law per task. Last, we describe the formal layer. An
+agent writes the spec, a model of the kernel and the proof in each of seven formal
+languages, and six checks decide whether the proof certifies anything. Those checks
+execute every formal artifact on the PBT cases and catch each kind of spec gaming.
+Their core is built, and the pilot is pre-registered.
+\end{abstract}

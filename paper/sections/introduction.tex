@@ -1,0 +1,65 @@
+\section{Introduction}
+\label{sec:intro}
+
+Language-model agents now write and optimize GPU kernels in long, autonomous loops:
+propose a change, check it, measure it, keep it or revert it
+\citep{ouyang2025kernelbench,lange2025robust,karpathy2026autoresearch}. The check is
+usually \allclose against a reference implementation, and the literature has begun
+to document what slips past it: kernels that skip work, overfit the tested shapes or
+read the reference's answer \citep{lange2025robust,sarkar2026illusion}.
+
+The problem is structural, not incidental. In an autoresearch loop that trains a
+model, the metric is held-out loss, so search pressure and correctness pressure point
+the same way: a wrong model simply scores worse. In kernel optimization they point in
+opposite directions. Dropping the max-subtraction from a softmax, or the centering
+and the divide from a layernorm, makes the kernel \sabSpeedNoMax--\sabSpeedNoDivide$\times$
+faster in our measurements, and each produces plausible output. The correctness gate
+is not an auxiliary check bolted onto the loop. It is half of the fitness function, and
+two of its properties decide what the loop can reach. \emph{Calibration}: does the gate
+accept correct kernels that differ from the reference in the last bits, as every
+optimized kernel does? \emph{Completeness}: does it reject every wrong kernel the agent
+can cheaply find? A third property, the gate's cost, decides how many iterations the
+loop can afford.
+
+We built a harness around these three requirements, one layer each
+(Figure~\ref{fig:harness}):
+\begin{itemize}
+  \item \textbf{Skills}: versioned, natural-language procedures loaded into an agent's
+    context. They carry what earlier sessions measured, so that later agents neither
+    rediscover it nor exploit it, and they set what each sub-agent is allowed to see.
+  \item \textbf{Property-based testing (PBT)}: a gate built from algebraic laws and
+    metamorphic relations, evaluated offline over byte-identical replayed executions, so
+    that competing oracles can be compared fairly and the gate costs milliseconds.
+  \item \textbf{Formal proof}: agent-written proofs that a kernel adheres to its
+    specification, issued as certificates only after the gate accepts the kernel. The
+    agent writes the spec too. Six checks, run on PBT's own executions, decide whether a
+    proof certifies anything.
+\end{itemize}
+
+\paragraph{Contributions.}
+\begin{enumerate}
+  \item A controlled comparison of four oracle strategies (\allclose, a
+    LAPACK-style normalized test ratio, a declarative property bundle and a hybrid)
+    over identical recorded executions on NumPy and Triton (\S\ref{sec:calibration},
+    \S\ref{sec:detection}). The four tie on detection. They differ sharply on false
+    positives, and the field default cannot gate a loop at all.
+  \item A property-gated autoresearch loop and a saboteur matrix showing that the gate
+    has teeth and that the reachable frontier depends on the choice of oracle
+    (\S\ref{sec:loop}).
+  \item An exact characterization of the property bundles' solution sets, showing ten
+    admitted wrong kernels, including one \fillSpeedup$\times$ faster than the real
+    kernel, and a one-law completion for each task (Proposition~\ref{prop:softmax},
+    \S\ref{sec:incomplete}).
+  \item Evidence that skills shape what agents produce: blinding the mutant authors changed
+    the corpus, and naming reward hacks in the loop's instructions changed what agents
+    proposed (\S\ref{sec:skills-results}).
+  \item A certificate design for agent-written proofs, in which the agent writes the spec
+    as well and spec gaming is measured rather than forbidden. Each of its six checks is
+    the sole catcher of one cheat. The checks' core is built, and a seven-language pilot is
+    pre-registered (\S\ref{sec:formal}, \S\ref{sec:program}).
+\end{enumerate}
+
+The skills and PBT layers are built and measured. Of the formal layer, the
+language-neutral checking core is built, and the first proof about the oracle, Proposition~\ref{prop:softmax}(a,b),
+is machine-checked. No agent has written a proof yet. We
+label every claim as measured, built or planned.

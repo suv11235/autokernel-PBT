@@ -446,7 +446,9 @@ LLMs are used for:
 
 - Kernel generation and translation loops (consumers of this layer)
 - Any search or optimization loop
-- Formal verification — the literature already wins where it applies; we do not compete there
+- Formal verification — the literature already wins where it applies; we do not compete there.
+  Narrowed by `docs/adr/0002-formal-track.md`: agent-written proofs about kernel code are in scope;
+  equivalence checking of statically analyzable kernels is not.
 - Multi-device distributed execution
 - FP8 tolerance tables (documented in config later)
 

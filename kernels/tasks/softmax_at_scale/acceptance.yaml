@@ -4,9 +4,10 @@
 # the GPU is actually loaded -- grid depth beyond the SM count and a tile width that
 # varies with the shape, so the compiled telemetry carries signal instead of a constant.
 #
-# No SHIFT_INVARIANCE criterion: the domain declares no relations, so there is no
-# partner case for a group property to read, and a contract naming one would build an
-# oracle that abstains on every group.
+# SHIFT_INVARIANCE is carried here, unlike when this task was first added. This is the
+# only task whose rows are wide enough to reach a shape-specialized defect, and running
+# the declarative arm with one fewer property on exactly that task would bias the
+# comparison the corpus exists to make.
 task_id: softmax_at_scale
 version: 1
 
@@ -28,3 +29,9 @@ criteria:
     check:
       type: property
       property: rows_sum_to_one
+
+  - id: SHIFT_INVARIANCE
+    description: adding a per-row constant to the input leaves the output unchanged
+    check:
+      type: property
+      property: shift_invariance

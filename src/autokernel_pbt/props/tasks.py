@@ -291,13 +291,21 @@ _SCALE_SHAPES: tuple[tuple[int, ...], ...] = (
 #: not a new reference: the point is to exercise occupancy, register pressure and a
 #: varying tile width, all of which are invisible at ladder scale, while keeping the
 #: numbers comparable with every softmax measurement already recorded.
+#: Carries ``shift_rows`` as of the corpus work, and the reason is a coverage hole
+#: rather than symmetry. Without a metamorphic partner ``shift_invariance`` never
+#: fires, so the declarative arm runs here with one fewer property than on the ladder
+#: -- and this is the ONLY task whose rows are wide enough to reach a
+#: shape-specialized defect (BLOCK exceeds 1024 only above n_cols 512, and the
+#: ladder's widest row is 129). Handicapping the declarative arm on the one task that
+#: can express the taxonomy's largest fault class would bias the comparison the corpus
+#: exists to make.
 SOFTMAX_AT_SCALE = Task(
     task_id="softmax_at_scale",
     domain=InputDomain(
         task_id="softmax_at_scale",
         tensors=(TensorSpec(name="x", dtype="float32", distribution="normal"),),
         shapes=_SCALE_SHAPES,
-        relations=(),
+        relations=(ShiftRows.name,),
     ),
 )
 

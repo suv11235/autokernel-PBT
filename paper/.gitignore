@@ -1,0 +1,9 @@
+*.aux
+*.bbl
+*.blg
+*.log
+*.out
+main.pdf
+# The AAAI author kit is fetched by each author, not committed.
+aaai20*.sty
+aaai20*.bst

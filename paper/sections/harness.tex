@@ -1,0 +1,136 @@
+\section{The Harness}
+\label{sec:harness}
+
+\input{figures/harness}
+
+Figure~\ref{fig:harness} shows one iteration. An agent edits a candidate kernel, the
+PBT gate scores it, and only admitted candidates are measured on the loop's objective.
+That objective is kernel speed in a kernel-optimization loop, or validation
+bits-per-byte (\texttt{val\_bpb}) when the kernels sit inside a model being trained.
+A ledger keeps or reverts the candidate. The three layers below divide the work.
+
+\subsection{Skills}
+\label{sec:skills}
+
+A skill is a versioned document that an agent loads into its context: a procedure, a
+set of rules, or a record of what not to rediscover \citep{anthropic2025skills}. Long
+sessions and fresh sub-agents lose what earlier ones measured unless it is written
+down where the next agent will read it. Four skills carry the weight in this work.
+\begin{itemize}
+  \item \textbf{Module contracts.} The repository's agent notes record more than
+    \contractCount{} contracts, each of which once cost a review round to establish. For
+    example: a reduction's tolerance takes the reduction length explicitly; PyTorch's
+    caching allocator hides out-of-bounds accesses from \texttt{compute-sanitizer}; and a
+    Triton tile narrower than its row silently drops the row's tail.
+  \item \textbf{The review standard.} Every assertion in a test must be the
+    \emph{unique} catcher of at least one deliberately broken implementation (a
+    saboteur). This is verified by deleting each assertion in turn and checking that
+    exactly its own saboteurs survive.
+  \item \textbf{The blinded-authoring protocol.} An agent writing a mutant receives the
+    correct kernel and one verbatim fault-class description from the bug taxonomy
+    \citep{rathnasuriya2026tile}, and nothing else. It never sees the property set,
+    tolerances, other mutants or results. Here the skill specifies what is
+    \emph{withheld}.
+  \item \textbf{The loop program.} The instructions for the optimizing agent name the two
+    cheapest reward hacks and their measured speedups, state each kernel's semantics, and
+    point to the measured headroom.
+\end{itemize}
+
+\subsection{Property-based testing over replayed executions}
+\label{sec:pbt}
+
+\paragraph{Record, then replay.}
+A seeded generator emits \emph{case groups}: a base input plus metamorphic partners
+that share a group identity, such as $x$ and $x + c\mathbf{1}^\top$ with one constant
+per row. The whole batch executes once on one backend, and inputs, outputs and device
+telemetry are persisted (tensors to safetensors, rows to Parquet). Every oracle is then
+evaluated \emph{offline} over the same bytes. This makes the comparison fair by
+construction, since no oracle influences which inputs another sees, and a recorded hardware run
+can be re-scored by a new oracle without touching a device. Oracles return
+\textsc{pass}, \textsc{fail} or \textsc{inconclusive}, so that a case where no
+judgment is defined is never counted as a caught bug. The unit of every rate is the
+case group.
+
+\paragraph{Four oracle arms.}
+\allclose is the field default, \texttt{np.allclose} against the reference with
+$\mathrm{rtol}=\allcloseRtol$ and $\mathrm{atol}=\allcloseAtol$. It is deliberately
+untuned. \RefArm replaces elementwise comparison with a LAPACK-style normalized test ratio
+\citep{anderson1992lawn41}:
+\begin{equation}
+  r(\hat y, y) \;=\; \frac{\lVert \hat y - y \rVert_\infty}
+       {\lVert y \rVert_\infty \cdot \eps_{\text{dtype}} \cdot \max(\log_2 n,\, 1)}
+  \;\le\; \refThresh,
+  \label{eq:ratio}
+\end{equation}
+where $n$ is the reduction length and $\log_2 n$ is the error bound for pairwise
+summation \citep{higham2002accuracy}. \DeclArm evaluates a per-task bundle of laws and never
+consults a reference. For softmax the bundle is: every output is finite, every output
+lies in $[0,1]$, every row sums to one, and the output is invariant under per-row input
+shifts. For layernorm it is: finite outputs, zero row mean, unit row variance and shift
+invariance. Tolerances for the bundles come from each dtype's rounding budget. \HybArm
+evaluates the laws first and recomputes the reference only when the laws find nothing.
+
+\paragraph{Corpus and backends.}
+Development uses a ladder of \ladderGroups{} shapes per task, from $(8,8)$ to $(7,129)$,
+with the degenerate rungs $(1,1)$ and $(17,1)$. On single-column rows softmax is
+identically $1$ for \emph{any} implementation, so \ladderCeiling{} is the most any arm
+can detect on softmax, and every absolute rate below is deflated by that constant. Shift
+partners are scaled to $\tfrac12\log(\text{float max})$, the regime where a missing
+max-subtraction actually overflows. Kernels run on a NumPy backend and on Triton
+\tritonVersion{} on an \gpuName{} (\gpuArch) behind one backend interface.
+
+\subsection{Formal proof: agent-written certificates}
+\label{sec:formal}
+
+A test can only check the properties it was given. A formal statement can say that a
+kernel computes a function. In our design the kernel-writing agent writes everything
+in a formal language: a \emph{spec} formalizing the informal one, a \emph{model} of the
+kernel, \emph{hypotheses} under which it claims adherence, and a \emph{proof} of a
+theorem whose shape the harness fixes, $\forall x.\; H(x) \Rightarrow S(x, M(x))$. An
+agent rewarded for an accepted proof has cheaper routes than proving adherence. It can
+weaken the spec, model a simpler kernel, assume a hypothesis nothing satisfies, or
+rely on a false axiom. The gate's blind spot (\S\ref{sec:incomplete}) is the first of
+these, committed by a person. We therefore let the agent write the spec on purpose and
+\emph{measure} the gaming.
+
+%% Source: docs/superpowers/specs/2026-10-01-agent-formal-adherence-design.md, section 5.
+\begin{table}[t]
+\centering
+\small
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{@{}lp{0.40\columnwidth}p{0.40\columnwidth}@{}}
+\toprule
+& Establishes & Sole-catcher cheat \\
+\midrule
+C1 & checker accepts the proof, no escape hatch & proof ends in \texttt{sorry} \\
+C2 & spec accepts the reference's outputs & spec is the kernel, bit for bit \\
+C3 & spec rejects every wrong output held, the kernel's own included & spec made of the gate's four laws \\
+C4 & model matches the real kernel's executions & model of a tail-dropping kernel computes the whole row \\
+C5 & hypotheses hold on every case & $\texttt{BLOCK} \ge n$ on a launch with $\texttt{BLOCK} < n$ \\
+C6 & axioms hold on samples; no derivation of \textsf{False} & axiom $\exp(x) = 1 + x$ \\
+\bottomrule
+\end{tabular}
+\caption{The six checks a proof must pass to certify adherence. Each is the only check
+  that rejects its cheat. C2--C6 run each artifact's executable reading on PBT's
+  cases, with comparisons and tolerances the harness owns.}
+\label{tab:checks}
+\end{table}
+
+A proof certifies adherence only if all \formalChecks{} checks in Table~\ref{tab:checks}
+pass. Every artifact must have an executable reading, obtained from the proved
+definitions themselves (for example, a definition over an abstract numeric type
+instantiated at IEEE floats). The PBT machinery then executes the formal claims on its
+own cases, backends and rounding budget. The agent never sees those cases. C2 and C3
+pin the spec between the reference and a hidden set of wrong kernels that includes
+every row of Table~\ref{tab:gap}. A spec loose enough to admit the gate's failures fails
+C3, and one too tight to accept the reference fails C2. Certificates are issued only for
+kernels the gate has already accepted, and never act as the loop's filter, because a
+proof gate costs speed \citep{costa2026aicompiler}.
+
+\paragraph{Status.} The language-neutral core that runs C2--C6 is built and tested
+against a fake language adapter. Each check rejects its own cheat and no other, and
+deleting any of \formalRemovedConditions{} conditions inside the checks fails a test.
+Its review found one way to certify a wrong kernel. The disjunctive spec
+``$y = \softmax(x)$ or $y = \softmax(1.5x)$'' certified a $\softmax(1.5x)$ kernel,
+because C3 probed only the hidden set. C3 now also probes the kernel under proof. No
+formal language or agent has run yet (\S\ref{sec:program}).

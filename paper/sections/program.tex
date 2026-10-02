@@ -1,0 +1,68 @@
+\section{A Pre-Registered Program}
+\label{sec:program}
+
+None of the following has run. Each experiment states its success criterion and
+falsifier before any result, as every measurement in this work has. They are ordered
+so that each one measures the layer it targets, not a gap an earlier experiment could
+have closed.
+
+\paragraph{E1: agent-written adherence proofs, across languages.}
+This experiment asks whether an agent can produce a certificate (\S\ref{sec:formal})
+that a kernel adheres to its spec. It also asks in which formal languages, for which
+kernels, at what cost, and how often an accepted proof certifies the wrong thing.
+\begin{itemize}
+  \item \emph{Targets.} There are \pilotTargets{} of them, and the agent is not told which are wrong.
+    Three are correct: the Triton softmax and layernorm, and an \texttt{exp2} softmax that is
+    correct only because $2^{x\log_2 e} = e^x$. Four are wrong: $\softmax(2x)$, the
+    constant fill, rolled rows, and a kernel that drops each row's tail. For each, the
+    agent proves adherence or refutes it.
+  \item \emph{Languages.} \pilotLanguages{} in the pilot, spanning three verifier families:
+    Lean~4 with Mathlib \citep{demoura2021lean4,mathlib2020}, both with and without VeriTile
+    \citep{veritile2026}, plus Rocq and Isabelle/HOL; the SMT-driven Dafny, Verus, F* and
+    Why3; and floating-point routes through Rocq with Flocq and Gappa and through Why3's
+    SMT floating-point theories. Other languages join through adapters. A language that
+    cannot state the spec at all is recorded as a result.
+  \item \emph{Protocol.} Each (language, kernel, replicate) attempt is a fresh Claude
+    sub-agent with no budget cap: \pilotSessions{} sessions at \pilotReplicates{}
+    replicates. Cost is recorded for every session. The agent sees the six rules and none
+    of the data, the held-out practice of \citet{ye2025verina} and \citet{thakur2025clever}.
+\end{itemize}
+\emph{Measured:} the certified rate on correct kernels (pass@$k$); \emph{false
+certificates} on wrong kernels; the \emph{gaming profile}, meaning attempts that C1 accepts
+but C2--C6 reject, broken down by check; spec completeness on the hidden set against the
+human-written bundle's; refutations; and cost. \emph{Success} requires zero false
+certificates. Any single one is a hole in the harness and stops the study until it is
+closed. \emph{Predicted:} Dafny reaches the highest C1 rate and Lean the lowest, as
+\citet{bursuc2025vericoding} found for general programs. We also predict that in at least
+one language the agent writes a spec made of laws, which C3 rejects.
+
+\paragraph{E2: complete the bundle.}
+Proposition~\ref{prop:softmax}(a) and (b) are mechanized; mechanize (c). Then add the log-ratio and affine-tie laws to
+the gate with tolerances, and cover the inputs the real call site sends, including
+$-\infty$ masked scores. \emph{Success:} every family the proof says the old bundle admits
+is admitted by the old gate and rejected by the new one. The correct kernel and the
+positive control stay as they are, and no new false positive appears on the
+\loopCandidates{} loop candidates or the \fpGroups{} device groups. \emph{Falsified} by any
+new false positive. Whether fast-$\exp$ is admitted is decided by a stated accuracy
+budget.
+
+\paragraph{E3: red-team the gate.}
+Run a loop whose objective is kernel runtime, with no list of forbidden moves. Agents
+see only the gate's verdicts, and a hidden checker (the reference arm plus masked
+rows) re-scores every admitted kernel. Two conditions differ only in the bundle, current
+or completed. \emph{Measured:} the rate of wrong kernels admitted, time to the first
+hack, the best correct speedup, and gate latency. \emph{Predicted:} the current bundle is
+hacked, with the constant fill as the obvious target, and the completed bundle is not. The
+best correct speedups match.
+
+\paragraph{E4: formal feedback for self-improvement.}
+Repeat E3 with the completed bundle in both conditions, with and without formal results
+returned to the agent: failed checks, unsolved goals and refuting inputs. This tests
+whether proof feedback improves attempts beyond what a better gate alone gives.
+Verifier feedback is known to help in verified code generation
+\citep{ye2025verina,aggarwal2025alphaverus}, but not yet for numerical kernels.
+
+\paragraph{Cost, throughout.}
+We log the time and tokens each formalization takes. If formalizing a task costs more
+than writing a trusted reference, the declarative arm's ``no reference needed''
+argument weakens, and that is also a result.

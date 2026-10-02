@@ -1,0 +1,67 @@
+\section{Discussion and Limitations}
+\label{sec:discussion}
+
+%% Summary of sections 3-5; no new measurements.
+\begin{table}[t]
+\centering
+\small
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{@{}p{0.15\columnwidth}p{0.42\columnwidth}p{0.37\columnwidth}@{}}
+\toprule
+Layer & Provides & Does not provide \\
+\midrule
+Skills & measured lessons that persist across sessions; control of what each sub-agent sees
+       & correctness: compliance is not proof \\
+PBT    & calibrated, replayable verdicts; detection equal to a reference
+       & anything beyond tested inputs, or a complete bundle \\
+Formal & a model of the kernel proven to meet a spec that is pinned between the reference and known wrong kernels
+       & device IEEE behaviour, compiler; completeness beyond the wrong kernels held \\
+\bottomrule
+\end{tabular}
+\caption{What each layer contributes to a kernel the loop keeps. Of the formal row,
+  only the checking core is built.}
+\label{tab:layers}
+\end{table}
+
+Table~\ref{tab:layers} summarizes the division of labour. The layers fail independently,
+and each covers a failure the others cannot see. Skills cannot make a gate complete. A
+calibrated gate can still be incomplete (\S\ref{sec:incomplete}). A proof says nothing
+about the code that actually runs unless it is checked against that code's executions,
+which is why C2--C6 run on PBT's cases. The loop improves only when all three hold.
+
+The results also sharpen what a declarative oracle is for. Where a cheap reference
+exists, laws tie it on detection, add no calibration advantage over a well-normalized
+ratio, and, as drafted, admit wrong kernels that the reference rejects. Their value lies
+where no reference exists, as in translation to a new backend, and only once their
+completeness has been checked. The same holds for an agent-written formal spec, which is
+why the certificate design measures spec completeness (C3) instead of trusting it.
+
+\paragraph{Threats to validity.}
+Device results come from one GPU model, float32 only and seed 42. The mutation corpora
+are small, at most 15 mutants each and all on softmax, and the fault class of a mutant is
+the one its prompt asked for, not one that was verified. Absolute detection rates are
+deflated by the ladder's single-column rungs (\ladderCeiling{} ceiling). Arm-versus-arm
+comparisons are unaffected. The saboteurs and the families of Table~\ref{tab:gap} were
+chosen by authors who knew the bundles. They show that the gate \emph{can} fail and are
+not detection rates. The six rolled, reversed, sorted and negated rows come from a
+re-run script not yet recorded with the project's measurements. The training results in
+\S\ref{sec:incomplete} use one seed each. The gate counts abstention as a pass, which our
+matrix guards only for its own rows. Of the formal layer, only the checking core exists.
+It is tested against a fake adapter, and the guarantee that an adapter's executable
+readings come from the proved definitions is still that adapter's obligation.
+Proposition~\ref{prop:softmax}(a) and (b) are mechanized over an abstract ordered field and
+(c) is proven on paper; all hold over $\R$ and leave the floating-point forms open. C3 is a lower bound, since a spec that rejects every wrong
+kernel we hold may admit one nobody has written yet. Finally,
+this area produces a closely competing preprint roughly every month, so the related work
+must be re-checked before any submission.
+
+\section{Conclusion}
+
+For an agent that optimizes kernels, the correctness gate is half the objective. We
+showed that its calibration decides whether the loop can start, that its completeness
+decides what the loop converges to, and that a gate built from plausible laws can admit a
+wrong kernel \fillSpeedup$\times$ faster than the real one. Skills carry those lessons
+forward and keep each experiment's agents honest. PBT makes the gate cheap and fair to
+compare. Formal proof, written by the agent but checked against PBT's own executions
+and issued only after the gate accepts a kernel, is what can turn
+``passes the gate'' into a guarantee.
