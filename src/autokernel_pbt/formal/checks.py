@@ -124,19 +124,35 @@ def _spec_soundness(readings: Readings | None, cases: tuple[CaseRecord, ...]) ->
     return Finding(Check.SPEC_SOUNDNESS, True, detail)
 
 
+#: How spec completeness names the kernel under proof among the outputs it probes.
+_KERNEL_UNDER_PROOF = "the kernel under proof"
+
+
 def _spec_completeness(readings: Readings | None, cases: tuple[CaseRecord, ...]) -> Finding:
+    """The spec rejects every wrong output the harness holds: the hidden kernels', and the
+    kernel under proof's own.
+
+    The kernel under proof is probed too, because the theorem only says the spec accepts that
+    kernel's outputs. A spec that admits it by name — ``y = softmax(x)`` or ``y = K(x)`` — is
+    sound, rejects every hidden kernel, and would certify ``K`` wherever ``K`` is wrong. For a
+    kernel that is right on every case the extra probe judges nothing, and the detail says so.
+    """
     if readings is None:
         return Finding(Check.SPEC_COMPLETENESS, False, f"the spec has {_NO_READING}")
     accepted: dict[str, list[str]] = {}
-    judged = 0
+    judged = kernel_wrong = 0
     for case in cases:
-        for name, output in case.hidden.items():
+        outputs = [*case.hidden.items()]
+        if case.kernel is not None:
+            outputs.append((_KERNEL_UNDER_PROOF, case.kernel))
+        for name, output in outputs:
             cmp = Comparisons.for_output(case.inputs, output.dtype)
             if cmp.close(output, case.reference):
                 # Right here — a one-column softmax is 1.0 at any temperature — so there is
                 # nothing for the spec to reject on this case.
                 continue
             judged += 1
+            kernel_wrong += name == _KERNEL_UNDER_PROOF
             holds, why = _holds(readings.spec, case.inputs, output, cmp)
             if holds is None:
                 detail = f"spec reading {why} on {case.case_id} ({name})"
@@ -147,7 +163,10 @@ def _spec_completeness(readings: Readings | None, cases: tuple[CaseRecord, ...])
         which = ", ".join(f"{name} on {len(ids)}" for name, ids in sorted(accepted.items()))
         detail = f"spec accepts wrong output from {which} case(s)"
         return Finding(Check.SPEC_COMPLETENESS, False, detail)
-    detail = f"spec rejects every hidden kernel on all {judged} cases where it is wrong"
+    detail = (
+        f"spec rejects all {judged} wrong outputs it was shown, {kernel_wrong} of them from "
+        f"the kernel under proof"
+    )
     return Finding(Check.SPEC_COMPLETENESS, True, detail)
 
 

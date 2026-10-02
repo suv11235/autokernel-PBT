@@ -89,8 +89,8 @@ artifact that it, and only it, must reject — the repo's unique-catcher standar
 | | establishes | how | sole-catcher cheating artifact |
 |---|---|---|---|
 | **C1 proof** | the language's checker accepts the proof of the fixed-shape theorem, with no escape hatch | the checker, plus a per-language deny-list (`sorry`, `Admitted`, `admit`, `assume`, `external_body`, `--admit_smt_queries`, …) | a proof that ends in `sorry` |
-| **C2 spec soundness** | the spec accepts the reference's outputs on every generated case | the spec's executable reading, harness-owned comparisons | a spec of softmax(3x), proved for a softmax(3x) kernel — 3x is not in the hidden set, so only C2 can see it |
-| **C3 spec completeness** | the spec rejects every hidden wrong kernel's outputs wherever that kernel is wrong | the same reading, on the hidden set of §6 | a spec made of the gate's four laws |
+| **C2 spec soundness** | the spec accepts the reference's outputs on every generated case | the spec's executable reading, harness-owned comparisons | a spec that is the kernel itself, bit for bit — true of the kernel and of nothing else, so the reference fails it |
+| **C3 spec completeness** | the spec rejects every wrong output the harness holds — each hidden kernel's, and the kernel under proof's own — wherever that output is wrong | the same reading, on the hidden set of §6 and the kernel's recorded outputs | a spec made of the gate's four laws; and a spec that admits the kernel in hand by name, `y = softmax(x)` or `y = K(x)` |
 | **C4 model fidelity** | the model's outputs match the real kernel's on every generated case | the model's executable reading against the kernel's recorded outputs | a model of a tail-dropping kernel that computes the whole row |
 | **C5 non-vacuity** | the hypotheses hold on every generated case, and the theorem has the fixed shape | the hypotheses' executable reading; a structural check of the statement | the hypothesis `BLOCK ≥ n_cols` on a kernel launched with `BLOCK < n_cols` |
 | **C6 axioms** | assumptions beyond the base library mention only declared primitives (`exp`, `log`, `sqrt`), each holds on samples under its intended reading, and a bounded attempt to derive `False` fails | an audit, sampling, a bounded refutation | the axiom `exp(x) = 1 + x` |
@@ -234,6 +234,8 @@ toolchains among them.
   recorded.
 - **C3 is a lower bound.** A spec that rejects the whole hidden set may still admit a wrong kernel
   nobody has written yet; the set grows, and the doc says so beside every completeness number.
+  The kernel in hand is never such a kernel: its own recorded outputs are always probed, so no
+  wrong kernel can be certified by a spec written to admit it.
 - **C2, C4 and C5 are sampled**, with the same caveat as every PBT result in this repo.
 - **Agent cost.** Seven languages × seven targets × three replicates is 147 sessions for the pilot,
   before any adapter beyond the first seven.

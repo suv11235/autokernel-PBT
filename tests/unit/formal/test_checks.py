@@ -101,6 +101,17 @@ def spec_of_the_gates_case_laws(inputs, y, cmp):
     return in_range and cmp.close(np.sum(y, axis=-1), 1.0)
 
 
+def spec_that_is_the_kernel_itself(inputs, y, cmp):
+    """y is exactly what this float32 kernel computes: true of the kernel, about nothing else."""
+    return bool(np.array_equal(y, correct(inputs["x"])))
+
+
+def spec_admitting_the_kernel_in_hand(inputs, y, cmp):
+    """softmax(x), or else softmax(1.5x): sound, rejects every hidden kernel, and admits one."""
+    x = inputs["x"]
+    return cmp.close(y, definition(x)) or cmp.close(y, definition(x, 1.5))
+
+
 def model_of(kernel):
     return lambda inputs: kernel(inputs["x"])
 
@@ -167,16 +178,30 @@ CHEATS = {
         Check.PROOF,
         r"escape hatch",
     ),
-    "spec_fitted_to_a_wrong_kernel": (
+    "spec_that_is_the_kernel_itself": (
         lambda: (
             honest(
-                kernel_id="softmax_3x",
-                readings=Readings(spec_of(3.0), model_of(softmax_beta(3.0)), two_dimensional),
+                readings=Readings(spec_that_is_the_kernel_itself, model_of(correct), two_dimensional)
             ),
-            ground(softmax_beta(3.0)),
+            ground(),
         ),
         Check.SPEC_SOUNDNESS,
         r"rejects the reference",
+    ),
+    "spec_admitting_the_kernel_in_hand": (
+        lambda: (
+            honest(
+                kernel_id="softmax_1_5x",
+                readings=Readings(
+                    spec_admitting_the_kernel_in_hand,
+                    model_of(softmax_beta(1.5)),
+                    two_dimensional,
+                ),
+            ),
+            ground(softmax_beta(1.5)),
+        ),
+        Check.SPEC_COMPLETENESS,
+        r"accepts wrong output from the kernel under proof",
     ),
     "spec_made_of_the_gates_case_laws": (
         lambda: (
