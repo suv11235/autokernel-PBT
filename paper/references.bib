@@ -1,0 +1,371 @@
+% references.bib
+%
+% Entries without a comment were checked against reference/PBT-property-based-testing/
+% (README.md or NOTES.md), which records how each was verified. Entries marked
+% VERIFY were not checked against a primary source. Check each one before submission.
+% BibTeX ignores text between entries, so these comments are safe. Never type the
+% at-sign in a comment: BibTeX would parse what follows it as an entry.
+
+% ----- LLM-generated kernels and their oracles ---------------------------------
+
+@inproceedings{ouyang2025kernelbench,
+  author    = {Ouyang, Anne and Guo, Simon and Arora, Simran and Zhang, Alex L. and
+               Hu, William and R{\'e}, Christopher and Mirhoseini, Azalia},
+  title     = {{KernelBench}: Can {LLMs} Write Efficient {GPU} Kernels?},
+  booktitle = {Proceedings of the 42nd International Conference on Machine Learning (ICML)},
+  year      = {2025},
+  note      = {arXiv:2502.10517}
+}
+
+% VERIFY: author list (the repo's library records the title and arXiv id only).
+@misc{lange2025robust,
+  author        = {Lange, Robert Tjarko and Sun, Qi and Prasad, Aaditya and Faldor, Maxence and
+                   Tang, Yujin and Ha, David},
+  title         = {Towards Robust Agentic {CUDA} Kernel Benchmarking, Verification, and
+                   Optimization},
+  year          = {2025},
+  eprint        = {2509.14279},
+  archivePrefix = {arXiv},
+  howpublished  = {arXiv:2509.14279}
+}
+
+@misc{sarkar2026illusion,
+  author        = {Sarkar, Dipankar},
+  title         = {The Correctness Illusion in {LLM}-Generated {GPU} Kernels},
+  year          = {2026},
+  eprint        = {2606.20128},
+  archivePrefix = {arXiv},
+  howpublished  = {arXiv:2606.20128}
+}
+
+@misc{sarkar2026inputs,
+  author        = {Sarkar, Dipankar},
+  title         = {Test-Input Generation for Tensor Programs: What Actually Finds Kernel Bugs},
+  year          = {2026},
+  eprint        = {2606.27396},
+  archivePrefix = {arXiv},
+  howpublished  = {arXiv:2606.27396}
+}
+
+@misc{veit2026contracts,
+  author        = {Veit, Cooper},
+  title         = {Kernel Contracts: A Specification Language for {ML} Kernel Correctness
+                   Across Heterogeneous Silicon},
+  year          = {2026},
+  eprint        = {2604.22032},
+  archivePrefix = {arXiv},
+  howpublished  = {arXiv:2604.22032}
+}
+
+@misc{shah2026contract,
+  author        = {Shah, Rishi and Shrestha, Rishav},
+  title         = {A Contract-Grade Verifier for {LLM}-Generated {GPU} Kernels, and a Native
+                   {Blackwell} Backward for the Gated-Linear-Recurrence Family},
+  year          = {2026},
+  eprint        = {2608.12700},
+  archivePrefix = {arXiv},
+  howpublished  = {arXiv:2608.12700}
+}
+
+% VERIFY: given names are not recorded in the repo's library.
+@inproceedings{rathnasuriya2026tile,
+  author    = {Rathnasuriya and Song and Majoju and Moharir and Li and Yang and Xie},
+  title     = {Characterizing Real-World Bugs in Tile Programs for Automated Bug Detection},
+  booktitle = {Proceedings of the ACM SIGSOFT International Symposium on Software Testing
+               and Analysis (ISSTA)},
+  year      = {2026},
+  note      = {arXiv:2605.19652}
+}
+
+@misc{qiu2026propilot,
+  author        = {Qiu, Yuxin and Limpanukorn, Ben and Lee, Seongmin and Wang, Jiyuan and
+                   Zhang, Qian and Kim, Miryung},
+  title         = {Tensor Algebraic Property Skeletons: Amplifying Property-Based Testing for
+                   {AI} Compilers},
+  year          = {2026},
+  eprint        = {2606.06747},
+  archivePrefix = {arXiv},
+  howpublished  = {arXiv:2606.06747}
+}
+
+@misc{mughal2026oracles,
+  author        = {Mughal, Ali Hassaan and Bilal, Muhammad},
+  title         = {{LLM}-Based Test Oracles: Source-of-Authority Taxonomy -- A Systematic
+                   Literature Review},
+  year          = {2026},
+  eprint        = {2607.05031},
+  archivePrefix = {arXiv},
+  howpublished  = {arXiv:2607.05031}
+}
+
+% ----- Property-based testing, metamorphic testing, mutation analysis ----------
+
+@inproceedings{claessen2000quickcheck,
+  author    = {Claessen, Koen and Hughes, John},
+  title     = {{QuickCheck}: A Lightweight Tool for Random Testing of {Haskell} Programs},
+  booktitle = {Proceedings of the Fifth ACM SIGPLAN International Conference on Functional
+               Programming (ICFP)},
+  pages     = {268--279},
+  year      = {2000}
+}
+
+@inproceedings{hughes2020specify,
+  author    = {Hughes, John},
+  title     = {How to Specify It! {A} Guide to Writing Properties of Pure Functions},
+  booktitle = {Trends in Functional Programming (TFP 2019)},
+  series    = {Lecture Notes in Computer Science},
+  volume    = {12053},
+  pages     = {58--83},
+  publisher = {Springer},
+  year      = {2020}
+}
+
+@article{maciver2019hypothesis,
+  author  = {MacIver, David R. and Hatfield-Dodds, Zac and others},
+  title   = {Hypothesis: A New Approach to Property-Based Testing},
+  journal = {Journal of Open Source Software},
+  volume  = {4},
+  number  = {43},
+  pages   = {1891},
+  year    = {2019}
+}
+
+@article{chen2018metamorphic,
+  author  = {Chen, Tsong Yueh and Kuo, Fei-Ching and Liu, Huai and Poon, Pak-Lok and
+             Towey, Dave and Tse, T. H. and Zhou, Zhi Quan},
+  title   = {Metamorphic Testing: A Review of Challenges and Opportunities},
+  journal = {ACM Computing Surveys},
+  volume  = {51},
+  number  = {1},
+  pages   = {4:1--4:27},
+  year    = {2018}
+}
+
+@article{barr2015oracle,
+  author  = {Barr, Earl T. and Harman, Mark and McMinn, Phil and Shahbaz, Muzammil and
+             Yoo, Shin},
+  title   = {The Oracle Problem in Software Testing: A Survey},
+  journal = {IEEE Transactions on Software Engineering},
+  volume  = {41},
+  number  = {5},
+  pages   = {507--525},
+  year    = {2015}
+}
+
+@misc{vikram2023pbt,
+  author        = {Vikram, Vasudev and Lemieux, Caroline and Sunshine, Joshua and
+                   Padhye, Rohan},
+  title         = {Can Large Language Models Write Good Property-Based Tests?},
+  year          = {2023},
+  eprint        = {2307.04346},
+  archivePrefix = {arXiv},
+  howpublished  = {arXiv:2307.04346}
+}
+
+@inproceedings{andrews2005mutation,
+  author    = {Andrews, James H. and Briand, Lionel C. and Labiche, Yvan},
+  title     = {Is Mutation an Appropriate Tool for Testing Experiments?},
+  booktitle = {Proceedings of the 27th International Conference on Software Engineering
+               (ICSE)},
+  year      = {2005}
+}
+
+@inproceedings{just2014mutants,
+  author    = {Just, Ren{\'e} and Jalali, Darioush and Inozemtseva, Laura and
+               Ernst, Michael D. and Holmes, Reid and Fraser, Gordon},
+  title     = {Are Mutants a Valid Substitute for Real Faults in Software Testing?},
+  booktitle = {Proceedings of the 22nd ACM SIGSOFT International Symposium on Foundations
+               of Software Engineering (FSE)},
+  year      = {2014}
+}
+
+@inproceedings{papadakis2018mutation,
+  author    = {Papadakis, Mike and Shin, Donghwan and Yoo, Shin and Bae, Doo-Hwan},
+  title     = {Are Mutation Scores Correlated with Real Fault Detection? {A} Large Scale
+               Empirical Study on the Relationship Between Mutants and Real Faults},
+  booktitle = {Proceedings of the 40th International Conference on Software Engineering
+               (ICSE)},
+  year      = {2018}
+}
+
+% ----- Floating point and numerical testing ------------------------------------
+
+% VERIFY: report number and year of the revision cited.
+@techreport{anderson1992lawn41,
+  author      = {Anderson, Edward and Dongarra, Jack and Ostrouchov, Susan},
+  title       = {Installation Guide for {LAPACK}},
+  institution = {University of Tennessee},
+  type        = {LAPACK Working Note},
+  number      = {41},
+  year        = {1992}
+}
+
+@book{higham2002accuracy,
+  author    = {Higham, Nicholas J.},
+  title     = {Accuracy and Stability of Numerical Algorithms},
+  edition   = {2nd},
+  publisher = {SIAM},
+  year      = {2002}
+}
+
+@article{higham2019probabilistic,
+  author  = {Higham, Nicholas J. and Mary, Th{\'e}o},
+  title   = {A New Approach to Probabilistic Rounding Error Analysis},
+  journal = {SIAM Journal on Scientific Computing},
+  volume  = {41},
+  number  = {5},
+  pages   = {A2815--A2835},
+  year    = {2019}
+}
+
+% ----- Formal methods for kernels, verifier-guided generation ------------------
+
+% VERIFY: given names are not recorded in the repo's library.
+@misc{dubey2025volta,
+  author        = {Dubey and Driscoll and Wei and Kayal and Sharma and Aiken},
+  title         = {Equivalence Checking of {ML} {GPU} Kernels},
+  year          = {2025},
+  eprint        = {2511.12638},
+  archivePrefix = {arXiv},
+  howpublished  = {arXiv:2511.12638}
+}
+
+% VERIFY: authors and title. Pre-release repository, seen September 2026.
+@misc{veritile2026,
+  author       = {{VeriTile authors}},
+  title        = {{VeriTile}: A {Lean}~4 Framework for Reasoning about {Triton}-Style Kernels},
+  year         = {2026},
+  howpublished = {\url{https://github.com/Lizn-zn/VeriTile-release-staging-20260924}}
+}
+
+% Checked against the arXiv PDF (title page and Table 2).
+@misc{costa2026aicompiler,
+  author        = {Costa, Francois and Castes, Charly and Bourgeat, Thomas and
+                   Mirhoseini, Azalia},
+  title         = {{AI} as a Compiler: Compiling {Triton} Kernels without the {Triton}
+                   Compiler},
+  year          = {2026},
+  eprint        = {2609.36800},
+  archivePrefix = {arXiv},
+  howpublished  = {arXiv:2609.36800}
+}
+
+% VERIFY
+@article{liu2022atl,
+  author  = {Liu, Amanda and Bernstein, Gilbert Louis and Chlipala, Adam and
+             Ragan-Kelley, Jonathan},
+  title   = {Verified Tensor-Program Optimization via High-Level Scheduling Rewrites},
+  journal = {Proceedings of the ACM on Programming Languages},
+  volume  = {6},
+  number  = {POPL},
+  year    = {2022}
+}
+
+% VERIFY
+@misc{ye2025verina,
+  author        = {Ye, Zhe and Yan, Zhengxu and He, Jingxuan and Kasriel, Timothe and
+                   Yang, Kaiyu and Song, Dawn},
+  title         = {{VERINA}: Benchmarking Verifiable Code Generation},
+  year          = {2025},
+  eprint        = {2505.23135},
+  archivePrefix = {arXiv},
+  howpublished  = {arXiv:2505.23135}
+}
+
+% VERIFY: author list; the design doc cites it as Bursuc et al., 2025.
+@misc{bursuc2025vericoding,
+  author        = {Bursuc, Sergiu and others},
+  title         = {A Benchmark for Vericoding: Formally Verified Program Synthesis},
+  year          = {2025},
+  eprint        = {2509.22908},
+  archivePrefix = {arXiv},
+  howpublished  = {arXiv:2509.22908}
+}
+
+% VERIFY: author list and title.
+@misc{thakur2025clever,
+  author        = {Thakur, Amitayush and others},
+  title         = {{CLEVER}: A Curated Benchmark for Formally Verified Code Generation},
+  year          = {2025},
+  eprint        = {2505.13938},
+  archivePrefix = {arXiv},
+  howpublished  = {arXiv:2505.13938}
+}
+
+% VERIFY: author list and title.
+@misc{loughridge2024dafnybench,
+  author        = {Loughridge, Chloe and others},
+  title         = {{DafnyBench}: A Benchmark for Formal Software Verification},
+  year          = {2024},
+  eprint        = {2406.08467},
+  archivePrefix = {arXiv},
+  howpublished  = {arXiv:2406.08467}
+}
+
+% VERIFY
+@inproceedings{aggarwal2025alphaverus,
+  author    = {Aggarwal, Pranjal and Parno, Bryan and Welleck, Sean},
+  title     = {{AlphaVerus}: Bootstrapping Formally Verified Code Generation through
+               Self-Improving Translation and Treefinement},
+  booktitle = {Proceedings of the 42nd International Conference on Machine Learning (ICML)},
+  year      = {2025},
+  note      = {arXiv:2412.06176}
+}
+
+% VERIFY
+@inproceedings{disselkoen2024cedar,
+  author    = {Disselkoen, Craig and Eline, Aaron and He, Shaobo and Headley, Kyle and
+               Hicks, Michael and Hietala, Kesha and Kastner, John and Mamat, Anwar and
+               McCutchen, Matt and Rungta, Neha and Shah, Bhakti and Torlak, Emina and
+               Wells, Andrew},
+  title     = {How We Built {Cedar}: A Verification-Guided Approach},
+  booktitle = {Companion Proceedings of the 32nd ACM International Conference on the
+               Foundations of Software Engineering (FSE Companion)},
+  year      = {2024}
+}
+
+@inproceedings{demoura2021lean4,
+  author    = {de Moura, Leonardo and Ullrich, Sebastian},
+  title     = {The {Lean}~4 Theorem Prover and Programming Language},
+  booktitle = {Automated Deduction -- CADE 28},
+  series    = {Lecture Notes in Computer Science},
+  volume    = {12699},
+  pages     = {625--635},
+  publisher = {Springer},
+  year      = {2021}
+}
+
+@inproceedings{mathlib2020,
+  author    = {{The mathlib Community}},
+  title     = {The {Lean} Mathematical Library},
+  booktitle = {Proceedings of the 9th ACM SIGPLAN International Conference on Certified
+               Programs and Proofs (CPP)},
+  pages     = {367--381},
+  year      = {2020}
+}
+
+% ----- Agents, skills, loops -----------------------------------------------------
+
+@misc{karpathy2026autoresearch,
+  author       = {Karpathy, Andrej},
+  title        = {autoresearch},
+  year         = {2026},
+  howpublished = {\url{https://github.com/karpathy/autoresearch}}
+}
+
+% VERIFY: title and date of the announcement.
+@misc{anthropic2025skills,
+  author       = {{Anthropic}},
+  title        = {Equipping Agents for the Real World with Agent Skills},
+  year         = {2025},
+  howpublished = {Anthropic Engineering blog}
+}
+
+% VERIFY
+@misc{jordan2024muon,
+  author       = {Jordan, Keller and Jin, Yuchen and Boza, Vlado and You, Jiacheng and
+                  Cesista, Franz and Newhouse, Laker and Bernstein, Jeremy},
+  title        = {Muon: An Optimizer for Hidden Layers in Neural Networks},
+  year         = {2024},
+  howpublished = {\url{https://kellerjordan.github.io/posts/muon/}}
+}

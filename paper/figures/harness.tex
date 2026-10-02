@@ -1,0 +1,49 @@
+%% figures/harness.tex -- Figure 1, the harness. Solid boxes are built and
+%% measured. Dashed ones belong to the formal track, whose checking core is built
+%% but which no formal language or agent has run yet.
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[
+    font=\footnotesize,
+    box/.style={draw, rounded corners=2pt, align=center, inner sep=2pt,
+                minimum height=10mm},
+    planned/.style={box, dashed},
+    flow/.style={-{Latex[length=1.5mm]}, semithick},
+    back/.style={-{Latex[length=1.5mm]}, densely dotted},
+    lbl/.style={font=\scriptsize, inner sep=1pt},
+  ]
+  \node[box, text width=13mm] (agent) at (0,0) {Agent};
+  \node[box, text width=19mm] (gate) at (3.0,0) {PBT gate:\\record, replay,\\4 oracle arms};
+  \node[box, text width=14mm] (obj) at (6.0,0) {Objective:\\speed or\\\texttt{val\_bpb}};
+  \node[box, text width=76mm, minimum height=7mm] (skills) at (3.0,1.35)
+    {\textbf{Skills}: module contracts, review standard, blinded-authoring
+     protocol, loop program};
+  \node[planned, text width=19mm] (formal) at (3.0,-1.7)
+    {\textbf{Formal track}:\\spec, model, proof;\\six checks};
+  \node[box, text width=14mm] (ledger) at (6.0,-1.7) {Ledger:\\keep or\\revert};
+  \coordinate (bottom) at ($(formal.south) + (0,-2.5mm)$);
+
+  % main flow
+  \draw[flow] ([yshift=1.5mm]agent.east) -- ([yshift=1.5mm]gate.west);
+  \draw[flow] (gate) -- (obj);
+  \draw[flow] (obj) -- (ledger);
+  \draw[flow] (skills.south -| agent.north) -- (agent.north);
+  \draw[flow, dashed] (gate) -- node[lbl, right] {accepted} (formal);
+  \draw[flow, dashed] (formal) -- node[lbl, above] {certificate} (ledger);
+  % feedback to the agent
+  \draw[back] ([yshift=-1.5mm]gate.west) -- ([yshift=-1.5mm]agent.east);
+  \draw[back] (ledger.south) -- (ledger.south |- bottom)
+    -- node[lbl, below, pos=0.85] {best so far} ([xshift=-3mm]agent.south |- bottom)
+    -- ([xshift=-3mm]agent.south);
+  \draw[back, dashed] (formal.west) -| node[lbl, left, pos=0.75] {failed checks}
+    ([xshift=3mm]agent.south);
+\end{tikzpicture}
+\caption{The harness. An agent proposes a candidate with its skills in context. The
+  PBT gate scores it on recorded executions, and admitted candidates are measured on the
+  objective and kept or reverted. Dotted arrows are feedback to the agent:
+  counterexamples from the gate, and the best candidate so far. The formal track
+  (dashed) issues certificates only for kernels the gate accepted. The agent writes
+  the spec, the model and the proof, and six checks run on PBT's executions decide
+  whether the proof counts. Its checking core is built, but no language has run yet.}
+\label{fig:harness}
+\end{figure}

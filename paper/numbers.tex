@@ -1,0 +1,184 @@
+%% numbers.tex -- every measured number the paper quotes, defined once.
+%%
+%% Rule: prose never types a measured number directly. It uses a macro from this
+%% file, and each macro names the record it came from (paths are relative to the
+%% repository root). Re-measuring something means editing one line here, and a
+%% reviewer can audit every claim by reading this file next to docs/measurements/.
+%% Tables are the one exception: a table's cells are literal, and the comment
+%% directly above the table names the record they came from.
+%%
+%% Tags:  [M] measured and recorded in docs/measurements/
+%%        [P] probe: reproduced by a script, not yet recorded in docs/measurements/
+%%            (record it before submission; see README.md)
+
+% ---------------------------------------------------------------------------
+% Setup
+% ---------------------------------------------------------------------------
+% [M] docs/measurements/2026-08-17-first-hardware-run.md (header)
+\newcommand{\gpuName}{NVIDIA A10}
+\newcommand{\gpuArch}{sm\_86}
+\newcommand{\tritonVersion}{3.3.0}
+\newcommand{\torchVersion}{2.7.0}
+% [M] src/autokernel_pbt/props/tasks.py (_LADDER_SHAPES); 9 shapes, two single-column
+\newcommand{\ladderGroups}{9}
+\newcommand{\ladderCeiling}{7/9}
+% [M] src/autokernel_pbt/props/tolerance.py (DEFAULT_THRESH)
+\newcommand{\refThresh}{30}
+% [M] src/autokernel_pbt/props/oracle.py (AllcloseOracle defaults)
+\newcommand{\allcloseRtol}{10^{-5}}
+\newcommand{\allcloseAtol}{10^{-8}}
+% [M] docs/measurements/2026-08-16-allclose-layernorm-false-positives.md
+\newcommand{\atolBelowEps}{12}          % atol is ~12x below float32 eps
+
+% ---------------------------------------------------------------------------
+% Calibration: false positives on correct kernels
+% ---------------------------------------------------------------------------
+% [M] docs/measurements/2026-08-19-false-positive-rate.md
+\newcommand{\fpGroups}{54}              % 6 correct kernels x 9 groups
+\newcommand{\fpKernels}{6}
+\newcommand{\fpAllclose}{10/54}
+\newcommand{\fpAllcloseRate}{0.185}
+\newcommand{\fpAllcloseLN}{5/9}
+\newcommand{\fpAllcloseLNRate}{0.556}
+% [M] docs/measurements/2026-08-18-autoresearch-loop-pbt-gate.md, section 4
+\newcommand{\lnBrokenAllclose}{7/9}     % allclose on a *broken* layernorm
+% [M] docs/measurements/2026-08-19-false-positive-rate.md, section 3
+\newcommand{\sumsqWorstRatio}{48.1}     % layernorm_sumsq, shifted partner, (3,7)
+
+% ---------------------------------------------------------------------------
+% Reference-arm normalization
+% ---------------------------------------------------------------------------
+% [M] docs/superpowers/specs/2026-08-14-kernel-property-oracle-layer-design.md, 5.3
+\newcommand{\linearNDrift}{127}         % correct-kernel ratio drift, n=64..16384
+\newcommand{\linearNBlinder}{1500}      % detection floor vs allclose at n=4096
+\newcommand{\logHeadroomLo}{213}
+\newcommand{\logHeadroomHi}{779}
+% [M] docs/measurements/2026-08-17-hybrid-reduction-tree.md
+\newcommand{\multiTileLogDrift}{5.9}
+\newcommand{\multiTileOneDrift}{7.6}
+\newcommand{\multiTileTileAwareDrift}{3.5}
+\newcommand{\multiTileMaxTiles}{256}
+
+% ---------------------------------------------------------------------------
+% Detection: mutation corpora
+% ---------------------------------------------------------------------------
+% [M] docs/measurements/2026-08-17-provisional-corpus-pilot.md
+% [M] docs/measurements/2026-08-17-blinded-corpus-pilot.md
+% [M] docs/measurements/2026-08-18-arm-differentiation-null-result.md
+\newcommand{\mutantsAdmitted}{20}
+\newcommand{\armDisagreements}{0}
+\newcommand{\contamRejection}{0.00}
+\newcommand{\blindRejection}{0.20}
+\newcommand{\grownRejectionLadder}{0.27}
+\newcommand{\grownRejectionScale}{0.73}
+\newcommand{\grownTolFree}{3/11}
+% [M] reference/PBT-property-based-testing/README.md (ISSTA 2026 taxonomy)
+\newcommand{\isstaBugs}{301}
+\newcommand{\isstaSpecialization}{80}
+\newcommand{\isstaDtype}{58}
+% [M] docs/measurements/2026-08-17-blinded-corpus-pilot.md (widest ladder row)
+\newcommand{\ladderWidestRow}{129}
+
+% ---------------------------------------------------------------------------
+% Cross-backend transfer and scale
+% ---------------------------------------------------------------------------
+% [M] docs/measurements/2026-08-17-first-hardware-run.md
+\newcommand{\firstRunRows}{52}
+% [M] docs/measurements/2026-08-17-at-scale-hardware-run.md
+\newcommand{\scaleElements}{29.4\,M}
+\newcommand{\scaleRoofline}{78}         % percent of A10 peak bandwidth
+\newcommand{\tileTailRowSum}{1.51}      % BLOCK=2048 at n=4096: rows sum to 1.5089
+
+% ---------------------------------------------------------------------------
+% The autoresearch loop
+% ---------------------------------------------------------------------------
+% [M] docs/measurements/2026-08-18-autoresearch-loop-pbt-gate.md, section 1
+\newcommand{\loopCandidates}{26}
+\newcommand{\loopRounds}{6}
+\newcommand{\loopRejections}{0}
+\newcommand{\loopBpbBase}{2.829}        % 2.8287, sd 0.0104, 3 seeds
+\newcommand{\loopBpbBest}{2.228}        % 2.2280, sd 0.0147, 3 seeds
+\newcommand{\loopBpbGain}{21.2}         % percent
+\newcommand{\loopTputBase}{40.1}        % k tok/s (40072)
+\newcommand{\loopTputBest}{51.2}        % k tok/s (51166)
+\newcommand{\loopTputGain}{27.7}        % percent
+\newcommand{\loopGateLines}{140}
+% [M] same record, section 3 (author-chosen saboteurs; three were timed)
+\newcommand{\sabCount}{6}
+\newcommand{\sabSpeedNoMax}{1.11}
+\newcommand{\sabSpeedNoCenter}{1.76}
+\newcommand{\sabSpeedNoDivide}{2.40}
+% [M] same record, section 5
+\newcommand{\fastExpRelErr}{4.5\times10^{-6}}
+\newcommand{\fastExpWorse}{40}
+% [M] same record, section 7
+\newcommand{\wdCoverage}{7.7}           % percent of parameters weight decay reached
+
+% ---------------------------------------------------------------------------
+% Incompleteness of the property bundles
+% ---------------------------------------------------------------------------
+% [M] docs/measurements/2026-10-01-softmax-temperature-blind-spot.md
+\newcommand{\betaSweepValues}{16}
+\newcommand{\betaFirstCatch}{16}
+\newcommand{\refRatioLo}{1.1\times10^{6}}
+\newcommand{\refRatioHi}{4.0\times10^{6}}
+\newcommand{\spreadExact}{4.8}
+\newcommand{\spreadFastExp}{48}
+\newcommand{\spreadBetaTwo}{5.2\times10^{7}}
+\newcommand{\spreadBetaNeg}{1.04\times10^{8}}
+\newcommand{\spreadControl}{4.3}
+\newcommand{\bpbCorrect}{2.2292}
+\newcommand{\bpbBetaTwo}{2.2279}
+\newcommand{\bpbFill}{3.790}
+\newcommand{\fillSpeedup}{52--54}
+% [P] symmetry probe, re-run 2026-10-01 against pbt_gate.check_task, unmodified,
+%     GATE_SEED=42, NumPy 1.26.4. Script: symmetry_probe.py (not yet in the repo).
+\newcommand{\probeFamilies}{6}
+\newcommand{\gapFamiliesTotal}{10}      % 4 temperature rows + 6 probe rows
+
+% ---------------------------------------------------------------------------
+% Methodology findings in our own instrument
+% ---------------------------------------------------------------------------
+% [M] design spec 5.3 (shift relation scaled to the failure mechanism)
+\newcommand{\shiftUnitCatch}{0}         % percent, 400 trials
+\newcommand{\shiftScaledCatchLo}{11.8}
+\newcommand{\shiftScaledCatchHi}{18.0}
+% [M] design spec 6.5 (REPLAY_FAIRNESS passed vacuously through three fixes)
+\newcommand{\fairnessLayers}{3}
+\newcommand{\relabelLoss}{14/14}
+% [M] CLAUDE.md (review standard; module-contract table on branch widen-corpus-coverage)
+\newcommand{\reviewDefects}{20}
+\newcommand{\contractCount}{22}
+% [M] docs/measurements/2026-08-17-sanitizer-viability-probe.md
+\newcommand{\sanitizerOverrun}{1\,MB}
+
+% ---------------------------------------------------------------------------
+% The formal track (feature 0009 built; 0010 and 0011 planned)
+% ---------------------------------------------------------------------------
+% [M] branch formal-adherence (commits 82d47d8..9ed8ca9, not yet merged):
+%     specs/features/0009-formal-core/, src/autokernel_pbt/formal/,
+%     tests/unit/formal/. Suite: 641 passed, 1 skipped.
+\newcommand{\formalChecks}{6}
+\newcommand{\formalRemovedConditions}{20}   % conditions deleted one at a time, each caught
+% [M] docs/superpowers/specs/2026-10-01-agent-formal-adherence-design.md (on that branch)
+\newcommand{\pilotLanguages}{7}
+\newcommand{\pilotTargets}{7}
+\newcommand{\pilotReplicates}{3}
+\newcommand{\pilotSessions}{147}
+\newcommand{\axiomSamples}{4096}
+
+% ---------------------------------------------------------------------------
+% Proofs about the oracle (Proposition 1 mechanized)
+% ---------------------------------------------------------------------------
+% [M] docs/measurements/2026-10-01-softmax-bundle-mechanized.md; proofs/softmax-bundle/
+\newcommand{\leanTheorems}{6}
+\newcommand{\leanLines}{367}
+\newcommand{\leanVersion}{4.33.0}
+\newcommand{\expAxioms}{3}            % positive, additive, injective
+
+% ---------------------------------------------------------------------------
+% External numbers (cited, not ours)
+% ---------------------------------------------------------------------------
+% costa2026aicompiler, best provable vs best tested GEMM speedup
+\newcommand{\provableGemm}{0.24}
+\newcommand{\testedGemm}{1.03}

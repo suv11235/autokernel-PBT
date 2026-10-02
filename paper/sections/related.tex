@@ -1,0 +1,55 @@
+\section{Related Work}
+\label{sec:related}
+
+\paragraph{Checking LLM-generated kernels.}
+KernelBench scores generated kernels by \allclose against a PyTorch reference
+\citep{ouyang2025kernelbench}. Several 2025--26 studies show this oracle is inadequate.
+Agents exploit benchmark loopholes \citep{lange2025robust}, kernels that pass are often
+wrong \citep{sarkar2026illusion}, and boundary-shape input generation finds more bugs
+than adversarial values at far lower false-positive cost \citep{sarkar2026inputs}.
+Declarative kernel contracts \citep{veit2026contracts,shah2026contract} and
+tensor-algebraic property skeletons for DL compilers \citep{qiu2026propilot} already
+exist as concepts. A taxonomy of \isstaBugs{} real bugs in tile-based GPU programs
+\citep{rathnasuriya2026tile} supplies the fault classes we use to author mutants. A
+recent systematic review observes that LLM test oracles are mostly judged by how closely
+they resemble a known oracle, not by the faults they catch \citep{mughal2026oracles}. Our
+comparison scores oracles by the faults they catch, with the test budget held fixed by
+construction. Mutation analysis supports exactly this ordinal use
+\citep{andrews2005mutation,just2014mutants,papadakis2018mutation}.
+
+\paragraph{Property-based and metamorphic testing.}
+PBT \citep{claessen2000quickcheck,maciver2019hypothesis} and metamorphic testing
+\citep{chen2018metamorphic,barr2015oracle} replace example outputs with laws and
+relations. \citet{hughes2020specify} found that model-based properties, the analogue of our
+reference arm, caught every planted bug about ten times faster than metamorphic ones. He
+argued that metamorphic properties earn their place where the model is expensive or
+would repeat the implementation's bugs. Our detection results reproduce his finding for
+kernels that have a cheap trusted reference. LLMs can draft such properties
+\citep{vikram2023pbt}. We treat drafted bundles as artifacts whose completeness must be
+established rather than assumed. For numerical tolerances we follow LAPACK's normalized
+test ratios \citep{anderson1992lawn41} and the rounding-error analysis of
+\citet{higham2002accuracy} and \citet{higham2019probabilistic}.
+
+\paragraph{Formal methods for kernels and verifier-guided agents.}
+VOLTA checks equivalence of GPU kernels soundly and completely for a statically
+analyzable class, treating floats as reals \citep{dubey2025volta}. VeriTile reasons about
+Triton-style kernels in Lean~4 \citep{veritile2026,demoura2021lean4}. ATL proves scheduling
+rewrites of tensor programs correct in Coq \citep{liu2022atl}. Making proof a hard gate
+on kernel code is costly: when an agent lowers Triton kernels to PTX, the best provable
+GEMM ran at \provableGemm$\times$ against \testedGemm$\times$ for the best tested one
+\citep{costa2026aicompiler}. Agents now write verified code against given specs in Dafny,
+Verus and Lean \citep{loughridge2024dafnybench,bursuc2025vericoding}, and agent-written
+specs have been scored against held-out ground truth
+\citep{ye2025verina,thakur2025clever}. Verifier feedback improves those attempts
+\citep{aggarwal2025alphaverus}. None of this work targets numerical GPU kernels or
+floating point, or profiles how agents game their own specs. Industrial practice pairs a
+proven model with differential random testing of the production code
+\citep{disselkoen2024cedar}. We take the same division of labour: proofs about the oracle
+and the plan, tests on the code.
+
+\paragraph{Agent skills and long-running loops.}
+Agent skills package procedural knowledge as files an agent loads on demand
+\citep{anthropic2025skills}. autoresearch runs a fixed-budget keep-or-revert loop guided
+by a natural-language program \citep{karpathy2026autoresearch}. We use skills in both
+roles, as memory between sessions and as the specification of what an experiment's
+sub-agents may see.

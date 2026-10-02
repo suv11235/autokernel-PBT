@@ -1,0 +1,102 @@
+%% main.tex -- AAAI workshop draft.
+%% Build with `make` (see README.md). Sections live in sections/, every measured
+%% number lives in numbers.tex, and the one figure lives in figures/.
+%%
+%% Formatting follows the AAAI author kit. The kit's style file is not shipped
+%% with this repository. When it is present, it is used exactly as the kit's own
+%% template uses it. When it is absent, an approximate two-column layout is used
+%% so the draft still compiles; that layout is NOT submittable, and the log says so.
+\def\aaaistyle{aaai2026}% switch to the AAAI-27 kit's name once it is installed
+
+\documentclass[letterpaper]{article}
+
+\IfFileExists{\aaaistyle.sty}{%
+  \usepackage[submission]{\aaaistyle}%
+  \pdfinfo{/TemplateVersion (2026.1)}%
+  \newcommand{\usingaaaikit}{}%
+}{%
+  \PackageWarningNoLine{main}{\aaaistyle.sty not found. Using an approximate
+    layout that is not submittable. Install the AAAI author kit (README.md)}%
+  \usepackage[letterpaper,top=0.75in,bottom=1.25in,hmargin=0.75in,
+              columnsep=0.33in]{geometry}%
+  \csname @twocolumntrue\endcsname% \makeatletter has no effect inside an argument
+  \newcommand{\affiliations}[1]{}%
+  \bibliographystyle{plainnat}%
+}
+
+% The AAAI kit's required packages and settings, in the kit's order.
+\usepackage{times}
+\ifdefined\nopsfonts % set by the Makefile when Helvetica/Courier metrics are absent
+  \PackageWarningNoLine{main}{Helvetica and Courier metrics are not installed, so
+    sans and mono fall back to Computer Modern. Output is not submittable
+    (tlmgr install helvetic courier)}
+  \renewcommand{\sfdefault}{cmss}% times.sty points these at phv and pcr
+  \renewcommand{\ttdefault}{cmtt}%
+\else
+  \usepackage{helvet}
+  \usepackage{courier}
+\fi
+\usepackage[hyphens]{url}
+\usepackage{graphicx}
+\urlstyle{rm}
+\def\UrlFont{\rm}
+\usepackage{natbib}
+\usepackage{caption}
+\frenchspacing
+\setlength{\pdfpagewidth}{8.5in}
+\setlength{\pdfpageheight}{11in}
+
+% Additional packages. None is on the AAAI list of disallowed packages.
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{amsthm}
+\usepackage{booktabs}
+\usepackage{xspace}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,calc}
+
+% Sections are numbered so that cross-references resolve (the kit permits 1 or 2).
+\setcounter{secnumdepth}{2}
+
+\newtheorem{proposition}{Proposition}
+\theoremstyle{remark}
+\newtheorem*{remark}{Remark}
+
+% Notation used throughout.
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\softmax}{\operatorname{softmax}}
+\newcommand{\LN}{\operatorname{LN}}
+\newcommand{\eps}{\varepsilon}
+\newcommand{\allclose}{\texttt{allclose}\xspace}
+\newcommand{\arm}[1]{\textsc{#1}\xspace}
+\newcommand{\RefArm}{\arm{reference}}
+\newcommand{\DeclArm}{\arm{declarative}}
+\newcommand{\HybArm}{\arm{hybrid}}
+
+% Draft notes. Set \draftfalse to check that none remain before submitting.
+\newif\ifdraft\drafttrue
+\newcommand{\note}[1]{\ifdraft\textcolor{red}{[#1]}\fi}
+
+\input{numbers}
+
+\title{Skills, Properties, Proofs:\\
+       A Harness for Long-Running Kernel-Optimizing Agents}
+\author{Anonymous Submission}
+\date{}
+\affiliations{}
+
+\begin{document}
+
+\maketitle
+
+\input{sections/abstract}
+\input{sections/introduction}
+\input{sections/related}
+\input{sections/harness}
+\input{sections/results}
+\input{sections/program}
+\input{sections/discussion}
+
+\bibliography{references}
+
+\end{document}
