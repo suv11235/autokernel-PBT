@@ -124,14 +124,24 @@ def fits_one_tile(inputs):
     return inputs["x"].shape[-1] <= TILE
 
 
-def exp_adds(rng: np.random.Generator) -> bool:
+def exp_adds(rng: np.random.Generator, cmp) -> bool:
     a, b = rng.normal(size=2)
-    return bool(np.isclose(np.exp(a + b), np.exp(a) * np.exp(b), rtol=1e-12))
+    return cmp.close(np.exp(a + b), np.exp(a) * np.exp(b))
 
 
-def exp_is_linear(rng: np.random.Generator) -> bool:
+def exp_is_linear(rng: np.random.Generator, cmp) -> bool:
     t = rng.normal()
-    return bool(np.isclose(np.exp(t), 1.0 + t, rtol=1e-9))
+    return cmp.close(np.exp(t), 1.0 + t)
+
+
+def an_approximation_is_exp(rng: np.random.Generator, cmp) -> bool:
+    """An approximate exp stated as exact: off by 2e-6, as the fast-exp candidate is.
+
+    Inside a float32 budget and far outside float64's, so it pins that axioms are read at the
+    precision of the reals they are about, not at the kernel's.
+    """
+    t = rng.normal()
+    return cmp.close(np.exp(t) * (1.0 + 2e-6), np.exp(t))
 
 
 SOUND_PROOF = ProofCheck(
@@ -268,6 +278,14 @@ CHEATS = {
         Check.AXIOMS,
         r"false on a sample",
     ),
+    "axiom_that_an_approximation_is_exp": (
+        lambda: (
+            honest(axioms=(Axiom("fast_exp_is_exp", frozenset({"exp"}), an_approximation_is_exp),)),
+            ground(),
+        ),
+        Check.AXIOMS,
+        r"false on a sample",
+    ),
     "axiom_nobody_can_test": (
         lambda: (honest(axioms=(Axiom("exp_add", frozenset({"exp"}), None),)), ground()),
         Check.AXIOMS,
@@ -321,7 +339,7 @@ def raising_hypotheses(inputs):
     return inputs["missing"].ndim == 2
 
 
-def raising_axiom(rng):
+def raising_axiom(rng, cmp):
     return 1 / 0 == 0
 
 

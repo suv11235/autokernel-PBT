@@ -45,13 +45,15 @@ class Axiom:
     """An assumption the proof rests on beyond the language's base library.
 
     ``mentions`` is every identifier the axiom's statement refers to, as the adapter parsed it.
-    ``holds_on`` draws a sample, evaluates the axiom under its intended reading, and says whether
-    it held. ``None`` means the axiom has no reading, and an axiom nobody can test fails closed.
+    ``holds_on`` draws a sample, evaluates the axiom under its intended reading — comparing
+    through the harness's ``Comparisons``, as a spec does, so no adapter picks the tolerance an
+    axiom is judged at — and says whether it held. ``None`` means the axiom has no reading, and
+    an axiom nobody can test fails closed.
     """
 
     name: str
     mentions: frozenset[str]
-    holds_on: Callable[[np.random.Generator], bool] | None
+    holds_on: Callable[[np.random.Generator, Comparisons], bool] | None
 
 
 @dataclass(frozen=True)

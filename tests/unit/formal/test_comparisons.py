@@ -38,6 +38,21 @@ def test_the_budget_is_the_outputs_dtype_not_the_specs_arithmetic():
     assert Comparisons.for_output({"x": X}, np.float32) == FLOAT32_ROWS_OF_8
 
 
+def test_order_forgives_rounding_and_nothing_more():
+    """y <= 1 and y >= 0 are budgeted as closeness is: 10 ulp past a bound is rounding, 100 is not.
+
+    Over rows of one the budget is 30 eps, so the two sides of each pair straddle it.
+    """
+    rows_of_1 = Comparisons(dtype=np.dtype(np.float32), n=1)
+    ulp = np.finfo(np.float32).eps
+    ones = np.ones(4, dtype=np.float32)
+    assert rows_of_1.at_most(ones + np.float32(10) * ulp, 1.0)
+    assert not rows_of_1.at_most(ones + np.float32(100) * ulp, 1.0)
+    assert rows_of_1.at_least(-np.float32(10) * ulp * ones, 0.0)
+    assert not rows_of_1.at_least(-np.float32(100) * ulp * ones, 0.0)
+    assert not rows_of_1.at_most(ones, np.ones(3))  # a bound of another shape is not stretched
+
+
 def test_the_budget_grows_with_the_accumulation_length():
     """The budget is 30 eps times log2(n), floored at log2 = 1, as the reference arm's is.
 

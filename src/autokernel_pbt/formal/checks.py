@@ -232,6 +232,10 @@ def _axioms(attempt: Attempt, primitives: frozenset[str]) -> Finding:
         detail = "False is derivable from the axioms within the bounded attempt"
         return Finding(Check.AXIOMS, False, detail)
     rng = np.random.default_rng(0)
+    # Axioms are statements about the reals their primitives are defined on, read in float64, so
+    # they are compared at float64's rounding over one operation — not at the kernel's precision,
+    # under which an approximation stated as an identity (fast-exp is off by ~2e-6) would hold.
+    cmp = Comparisons(dtype=np.dtype(np.float64), n=1)
     for axiom in attempt.axioms:
         beyond = axiom.mentions - primitives
         if beyond:
@@ -243,7 +247,7 @@ def _axioms(attempt: Attempt, primitives: frozenset[str]) -> Finding:
         if axiom.holds_on is None:
             return Finding(Check.AXIOMS, False, f"axiom {axiom.name!r} has {_NO_READING}")
         for _ in range(AXIOM_SAMPLES):
-            holds, why = _holds(axiom.holds_on, rng)
+            holds, why = _holds(axiom.holds_on, rng, cmp)
             if holds is None:
                 return Finding(Check.AXIOMS, False, f"axiom {axiom.name!r} reading {why}")
             if not holds:

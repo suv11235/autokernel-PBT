@@ -50,3 +50,22 @@ class Comparisons:
         if expected.ndim == 0:
             expected = np.broadcast_to(expected, actual.shape)
         return within_threshold(residual_ratio(actual, expected, dtype=self.dtype, n=self.n))
+
+    def at_most(self, actual: np.ndarray, bound: np.ndarray | float) -> bool:
+        """Whether every element of ``actual`` is at most ``bound``, up to the rounding budget.
+
+        Only the excess over the bound is budgeted, through the same normalized ratio as
+        closeness, so an order law forgives exactly the rounding an equality law does and no
+        more. A scalar bound is broadcast; an array bound must match ``actual``'s shape.
+        """
+        actual = np.asarray(actual)
+        bound = np.asarray(bound)
+        if bound.ndim == 0:
+            bound = np.broadcast_to(bound, actual.shape)
+        elif bound.shape != actual.shape:
+            return False
+        return self.close(actual, np.minimum(actual, bound))
+
+    def at_least(self, actual: np.ndarray, bound: np.ndarray | float) -> bool:
+        """Whether every element of ``actual`` is at least ``bound``, up to the rounding budget."""
+        return self.at_most(-np.asarray(actual), -np.asarray(bound))
