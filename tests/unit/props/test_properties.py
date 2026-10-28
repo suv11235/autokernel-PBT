@@ -147,6 +147,7 @@ def test_registries_are_keyed_by_property_name():
         "outputs_are_finite",
         "values_in_unit_interval",
         "rows_sum_to_one",
+        "rows_have_constant_log_ratio",
         "rows_have_zero_mean",
         "rows_have_unit_variance",
     }

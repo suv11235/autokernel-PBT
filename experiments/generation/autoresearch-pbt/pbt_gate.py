@@ -15,6 +15,10 @@ dropped.
 
 Reports every arm separately rather than an aggregate, because *which* arm fires is
 the measurement this experiment exists to produce.
+
+The declarative arm is built from one of two *bundles*: ``current``, the contract every
+recorded number was measured under and the default, and ``completed``, which adds softmax's
+log-ratio law (feature 0014, E2). The loop gates on the default.
 """
 
 from __future__ import annotations
@@ -31,7 +35,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from autokernel_pbt.props.backends.base import Status
 from autokernel_pbt.props.backends.numpy_backend import NumpyBackend
-from autokernel_pbt.props.contract import load_contract, oracle_from_contract
+from autokernel_pbt.props.contract import (
+    COMPLETED_CONTRACT_FILENAME,
+    CONTRACT_FILENAME,
+    KERNEL_TASKS_DIR,
+    Contract,
+    load_contract,
+    oracle_from_contract,
+)
 from autokernel_pbt.props.generator import Generator
 from autokernel_pbt.props.oracle import (
     AllcloseOracle,
@@ -51,6 +62,12 @@ TASKS = {
     "softmax": (SOFTMAX, softmax_reference, "softmax"),
     "layernorm": (LAYERNORM, layernorm_reference, "layernorm"),
 }
+
+#: The contract file each bundle's declarative arm is built from. Layernorm has no completed
+#: bundle yet -- its affine-tie law is not built -- so asking for one is refused, never answered
+#: with the current bundle under the completed bundle's name.
+BUNDLES = {"current": CONTRACT_FILENAME, "completed": COMPLETED_CONTRACT_FILENAME}
+DEFAULT_BUNDLE = "current"
 
 
 @dataclass
@@ -86,10 +103,18 @@ def _rows_by_group(kernel, task):
     return out
 
 
-def check_task(kernel, task_key: str) -> TaskVerdict:
-    task, reference_fn, contract_dir = TASKS[task_key]
-    contract = load_contract(REPO / "kernels" / "tasks" / contract_dir / "acceptance.yaml")
-    declarative = oracle_from_contract(contract)
+def bundle_contract(task_key: str, bundle: str) -> Contract:
+    """The contract ``bundle`` builds ``task_key``'s declarative arm from."""
+    path = REPO / KERNEL_TASKS_DIR / TASKS[task_key][2] / BUNDLES.get(bundle, "")
+    if bundle not in BUNDLES or not path.is_file():
+        msg = f"there is no {bundle!r} bundle for task {task_key!r}; bundles: {sorted(BUNDLES)}"
+        raise ValueError(msg)
+    return load_contract(path)
+
+
+def check_task(kernel, task_key: str, bundle: str = DEFAULT_BUNDLE) -> TaskVerdict:
+    task, reference_fn, _ = TASKS[task_key]
+    declarative = oracle_from_contract(bundle_contract(task_key, bundle))
     reference = ReferenceOracle(reference_fn)
     arms = {
         "allclose": AllcloseOracle(reference_fn),

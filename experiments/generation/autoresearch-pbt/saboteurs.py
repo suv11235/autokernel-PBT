@@ -30,7 +30,13 @@ unchanged on purpose. Completing the bundle is a separate experiment; when it la
 ``test_gate_saboteurs.py`` is meant to fail, and the rows are re-recorded deliberately,
 never loosened until they pass.
 
-    python saboteurs.py     prints the matrix as measured, with the log-ratio column
+E2 (feature 0014) added the completed bundle: the current one plus the log-ratio law. The
+current rows stay as measured, and ``COMPLETED`` records every row again under the completed
+bundle (``docs/measurements/2026-10-14-e2-log-ratio-law-prereg.md``). The gate's default is
+still the current bundle.
+
+    python saboteurs.py     prints the matrix as measured, under each bundle, with the
+                            log-ratio column
 """
 
 from __future__ import annotations
@@ -53,7 +59,7 @@ from autokernel_pbt.props.oracle import (
     HybridOracle,
     ReferenceOracle,
 )
-from autokernel_pbt.props.properties import RowsSumToOne
+from autokernel_pbt.props.properties import RowsHaveConstantLogRatio, RowsSumToOne
 
 HERE = Path(__file__).resolve().parent
 
@@ -196,6 +202,36 @@ SABOTEURS: dict[str, Saboteur] = {
     ),
 }
 
+# The completed bundle's verdicts. A family the current bundle admits now fails the law on the
+# same seven groups the reference catches it on; the hybrid arm attributes it to the law, because
+# its declarative half fails first and short-circuits the reference.
+_CAUGHT_BY_THE_LOG_RATIO_LAW = {
+    ALLCLOSE: (7, ALLCLOSE_PROPERTY),
+    REFERENCE: (7, REFERENCE_PROPERTY),
+    DECLARATIVE: (7, RowsHaveConstantLogRatio.name),
+    HYBRID: (7, RowsHaveConstantLogRatio.name),
+}
+_CAUGHT_THROUGH_ROW_SUMS = {
+    ALLCLOSE: (7, ALLCLOSE_PROPERTY),
+    REFERENCE: (7, REFERENCE_PROPERTY),
+    DECLARATIVE: (7, RowsSumToOne.name),
+    HYBRID: (7, RowsSumToOne.name),
+}
+
+#: Every row of ``SABOTEURS`` again, under the completed bundle: (expected, admitted). Kept beside
+#: the current rows rather than in them, so the current record stays exactly as measured.
+COMPLETED: dict[str, tuple[Mapping[str, tuple[int, str]], bool]] = {
+    "beta_1_correct": (_CAUGHT_BY_NO_ARM, True),
+    "beta_2": (_CAUGHT_BY_THE_LOG_RATIO_LAW, False),
+    "beta_0": (_CAUGHT_BY_THE_LOG_RATIO_LAW, False),
+    "beta_minus_1": (_CAUGHT_BY_THE_LOG_RATIO_LAW, False),
+    "uniform_fill": (_CAUGHT_BY_THE_LOG_RATIO_LAW, False),
+    # Admitted: its ratio is 17.2 against the stated budget of 30 (feature 0014's spec).
+    "fast_exp": (_CAUGHT_BY_NO_ARM, True),
+    # Its log-ratios are exact, so the law passes it and the row-sum law still catches it.
+    "unnormalized_positive_control": (_CAUGHT_THROUGH_ROW_SUMS, False),
+}
+
 #: ``pbt_gate.check_task`` writes ``f"{group_id} shape={shape} {property}: {detail}"``.
 _FIRST_FAILURE = re.compile(r"\S+ shape=\([^)]*\) (?P<property>\w+): ")
 
@@ -246,20 +282,22 @@ def main() -> None:
         f"numpy {np.__version__}, "
         f"GATE_SEED={pbt_gate.GATE_SEED}, GATE_GROUPS={pbt_gate.GATE_GROUPS}"
     )
-    print("| row | kernel | " + " | ".join(arms) + " | gate | log-ratio spread (eps) |")
-    print("|---" * (len(arms) + 4) + "|")
-    for name, saboteur in SABOTEURS.items():
-        verdict = pbt_gate.check_task(saboteur.kernel, saboteur.task)
-        cells = {a.arm: a for a in verdict.arms}
-        shown = [
-            f"{cells[arm].verdict} {cells[arm].groups_failed}/{cells[arm].groups_total}"
-            + (f" ({first_failing_property(cells[arm])})" if cells[arm].groups_failed else "")
-            for arm in arms
-        ]
-        gate = "admits" if verdict.passed else "rejects"
-        spread = log_ratio_spread_eps(saboteur.kernel, saboteur.task)
-        row = [name, saboteur.label, *shown, gate, f"{spread:.3g}"]
-        print("| " + " | ".join(row) + " |")
+    for bundle in pbt_gate.BUNDLES:
+        print(f"\n### {bundle} bundle\n")
+        print("| row | kernel | " + " | ".join(arms) + " | gate | log-ratio spread (eps) |")
+        print("|---" * (len(arms) + 4) + "|")
+        for name, saboteur in SABOTEURS.items():
+            verdict = pbt_gate.check_task(saboteur.kernel, saboteur.task, bundle=bundle)
+            cells = {a.arm: a for a in verdict.arms}
+            shown = [
+                f"{cells[arm].verdict} {cells[arm].groups_failed}/{cells[arm].groups_total}"
+                + (f" ({first_failing_property(cells[arm])})" if cells[arm].groups_failed else "")
+                for arm in arms
+            ]
+            gate = "admits" if verdict.passed else "rejects"
+            spread = log_ratio_spread_eps(saboteur.kernel, saboteur.task)
+            row = [name, saboteur.label, *shown, gate, f"{spread:.3g}"]
+            print("| " + " | ".join(row) + " |")
 
 
 if __name__ == "__main__":

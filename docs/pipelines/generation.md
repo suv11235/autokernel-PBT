@@ -33,7 +33,7 @@ competing gates are compared on identical executions.
 |---|---|---|---|---|
 | **G0** | `allclose` against a reference (the field default) | pass / fail | arm built; measured as a baseline | `AllcloseOracle` in [`props/oracle.py`](../../src/autokernel_pbt/props/oracle.py) |
 | **G1** | **PBT gate**: the declarative law bundle decides, and the reference and hybrid arms are scored alongside | the failing law and group | **[M]** on CPU | [`experiments/generation/autoresearch-pbt/`](../../experiments/generation/autoresearch-pbt/) |
-| **G2** | G1 with the **completed** bundle (log-ratio and affine-tie laws) | as G1 | [planned] E2 | — |
+| **G2** | G1 with the **completed** bundle (log-ratio and affine-tie laws) | as G1 | softmax half **[M]** offline (`bundle="completed"`); layernorm [planned] E2 | [`experiments/generation/e2-log-ratio-law/`](../../experiments/generation/e2-log-ratio-law/) |
 | **G3** | G2, red-teamed: a runtime objective, no forbidden-hack list, a hidden checker re-scoring every admitted kernel | as G1 | [planned] E3 | — |
 | **G4** | G2 plus a **post-hoc formal certificate** on each kept kernel: six checks, every claim executed on PBT's cases | certificate / failed check | core **[B]**; adapters and pilot [planned] E1 | [`src/autokernel_pbt/formal/`](../../src/autokernel_pbt/formal/) |
 | **G5** | G4 with **formal feedback returned to the agent**: failed checks, unsolved goals, refuting inputs | proof-state feedback | [planned] E4 | — |

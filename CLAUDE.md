@@ -64,9 +64,10 @@ pytest experiments -q       # the experiments' own tests, outside testpaths; CI 
   one opt out with `@pytest.mark.filterwarnings`, per-test, with a comment saying why.
 - Markers: `gpu`, `integration`, `spec`, `formal` (compiles the Lean proofs; skipped without a
   toolchain).
-- Each of `tests/spec/test_0004_*.py` through `test_0009_*.py` asserts every criterion in its
-  feature's `acceptance.yaml` resolves to a **collectable** test node (0005 onward also reject a
-  shared or file-only target). Adding a criterion that names a nonexistent test fails the suite.
+- Each of `tests/spec/test_0004_*.py` through `test_0009_*.py`, and `test_0014_*.py`, asserts
+  every criterion in its feature's `acceptance.yaml` resolves to a **collectable** test node (0005
+  onward also reject a shared or file-only target). Adding a criterion that names a nonexistent
+  test fails the suite.
   Features 0001 and 0002 have no such guard.
 - Spec before code: a feature gets `specs/features/NNNN-*/spec.md` + `acceptance.yaml` first,
   and the spec test starts red. See `specs/README.md` and `docs/adr/0001-sdd-tdd.md`.

@@ -61,6 +61,12 @@ PROPERTY_CHECK = "property"
 KERNEL_TASKS_DIR = Path("kernels") / "tasks"
 CONTRACT_FILENAME = "acceptance.yaml"
 
+#: Softmax's *completed* bundle (feature 0014, E2): its current contract plus the log-ratio law,
+#: in the same task directory. Deliberately NOT matched by ``contract_paths``: the driver and every
+#: recorded run score the one contract per task, and the completed one is chosen explicitly, by
+#: the gate, so no recorded number moves to it by accident.
+COMPLETED_CONTRACT_FILENAME = "acceptance.completed.yaml"
+
 #: The contract format this loader understands. Both feature specs and kernel
 #: contracts carry a ``version:``, and it is *read* here rather than merely written:
 #: a version key nobody validates reads as a compatibility guarantee the loader does

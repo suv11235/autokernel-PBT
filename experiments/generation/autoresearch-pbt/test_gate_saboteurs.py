@@ -12,6 +12,10 @@ softmax bundle holds for softmax(beta * x) at every beta
 bundle is a separate experiment; when it lands, these tests are meant to fail, and the
 rows in ``saboteurs.py`` are re-recorded deliberately rather than loosened to pass.
 
+E2 (feature 0014) landed the completed bundle beside the current one. Every test below that
+reads a recorded row runs under both: the current rows as they were measured, and
+``saboteurs.COMPLETED`` under the completed bundle.
+
 One assertion per test, and each is the sole catcher of a break in the gate the other
 two cannot see:
 
@@ -27,27 +31,45 @@ two cannot see:
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 
 import numpy as np
 import pbt_gate
 import pytest
-from saboteurs import SABOTEURS, first_failing_property
+from saboteurs import COMPLETED, SABOTEURS, first_failing_property
 
 from autokernel_pbt.props.oracle import DeclarativeOracle
 from autokernel_pbt.props.verdict import Verdict
 
 pytestmark = pytest.mark.integration
 
+BUNDLES = ("current", "completed")
 
-def _observed(name: str) -> dict[str, tuple[int, str]]:
+
+def _recorded(name: str, bundle: str) -> tuple[Mapping[str, tuple[int, str]], bool]:
+    """(expected per arm, admitted), as recorded for ``bundle``."""
+    if bundle == "current":
+        return SABOTEURS[name].expected, SABOTEURS[name].admitted
+    return COMPLETED[name]
+
+
+def _observed(name: str, bundle: str) -> dict[str, tuple[int, str]]:
     """Per arm, as the gate reports it: (groups failed, the property that failed first)."""
     saboteur = SABOTEURS[name]
-    verdict = pbt_gate.check_task(saboteur.kernel, saboteur.task)
+    verdict = pbt_gate.check_task(saboteur.kernel, saboteur.task, bundle=bundle)
     return {arm.arm: (arm.groups_failed, first_failing_property(arm)) for arm in verdict.arms}
 
 
+def test_every_saboteur_is_recorded_under_both_bundles():
+    """A completed row for every saboteur, and none for a saboteur that no longer exists: a stale
+    row would be read by no test, and a missing one would leave a kernel unpinned under the
+    bundle E2 measures."""
+    assert COMPLETED.keys() == SABOTEURS.keys()
+
+
+@pytest.mark.parametrize("bundle", BUNDLES)
 @pytest.mark.parametrize("name", sorted(SABOTEURS))
-def test_each_saboteur_is_caught_by_exactly_its_paired_arms(name: str):
+def test_each_saboteur_is_caught_by_exactly_its_paired_arms(name: str, bundle: str):
     """Equality over all four arms, never a subset check.
 
     A subset check ("the arms that should catch it do") cannot see an arm that starts
@@ -57,11 +79,12 @@ def test_each_saboteur_is_caught_by_exactly_its_paired_arms(name: str):
     the positive control through ``rows_sum_to_one``, and only the property tells those
     apart -- the group counts are identical.
     """
-    assert _observed(name) == SABOTEURS[name].expected
+    assert _observed(name, bundle) == _recorded(name, bundle)[0]
 
 
+@pytest.mark.parametrize("bundle", BUNDLES)
 @pytest.mark.parametrize("name", sorted(SABOTEURS))
-def test_the_gate_admits_exactly_the_saboteurs_it_is_recorded_admitting(name: str):
+def test_the_gate_admits_exactly_the_saboteurs_it_is_recorded_admitting(name: str, bundle: str):
     """The decision, which no arm's row carries.
 
     Every temperature kernel is caught by three arms, so the pairing above stays green
@@ -70,14 +93,17 @@ def test_the_gate_admits_exactly_the_saboteurs_it_is_recorded_admitting(name: st
     it, a gate that admits everything would satisfy every row of this test.
     """
     saboteur = SABOTEURS[name]
-    verdict = pbt_gate.check_task(saboteur.kernel, saboteur.task)
-    assert verdict.passed is saboteur.admitted
+    verdict = pbt_gate.check_task(saboteur.kernel, saboteur.task, bundle=bundle)
+    assert verdict.passed is _recorded(name, bundle)[1]
 
 
 @pytest.mark.parametrize(
-    "name", sorted(n for n, s in SABOTEURS.items() if s.expected["declarative"] == (0, ""))
+    ("name", "bundle"),
+    sorted(
+        (n, b) for n in SABOTEURS for b in BUNDLES if _recorded(n, b)[0]["declarative"] == (0, "")
+    ),
 )
-def test_a_declarative_pass_is_a_judgement_not_an_abstention(monkeypatch, name: str):
+def test_a_declarative_pass_is_a_judgement_not_an_abstention(monkeypatch, name: str, bundle: str):
     """Every result the gate's own declarative arm produced is a PASS -- none abstained.
 
     Observed through the arm ``check_task`` actually built, not a second one built
@@ -96,7 +122,7 @@ def test_a_declarative_pass_is_a_judgement_not_an_abstention(monkeypatch, name: 
 
     monkeypatch.setattr(DeclarativeOracle, "evaluate", evaluate)
     saboteur = SABOTEURS[name]
-    pbt_gate.check_task(saboteur.kernel, saboteur.task)
+    pbt_gate.check_task(saboteur.kernel, saboteur.task, bundle=bundle)
 
     not_passed = sorted(
         {(r.property_name, str(r.verdict), r.detail) for r in seen if r.verdict is not Verdict.PASS}
@@ -129,3 +155,11 @@ def test_a_candidate_the_gate_never_judged_is_refused(task: str, kernel, reason:
     assert verdict.passed is False
     assert re.search(reason, verdict.refused), verdict.refused
 
+
+@pytest.mark.parametrize(("task", "bundle"), [("layernorm", "completed"), ("softmax", "final")])
+def test_a_bundle_the_task_does_not_have_is_refused(task: str, bundle: str):
+    """Layernorm's completing law is not built, and a misspelled bundle names nothing. Either is a
+    bad call, so it raises; falling back to the current bundle would report its verdicts under
+    the completed bundle's name."""
+    with pytest.raises(ValueError, match=f"no {bundle!r} bundle for task {task!r}"):
+        pbt_gate.check_task(SABOTEURS["beta_1_correct"].kernel, task, bundle=bundle)

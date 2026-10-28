@@ -1,0 +1,94 @@
+feature_id: "0014"
+feature_name: log-ratio-law
+version: 1
+
+criteria:
+  - id: A_CORRECT_SOFTMAX_PASSES
+    description: the reference and the float32 stock kernel pass on every ladder case, and on rows far wider than the gate draws, underflow included
+    check:
+      type: unit_test
+      test: tests/unit/props/test_log_ratio_law.py::test_a_correct_softmax_passes_on_every_ladder_case_and_on_wide_rows
+
+  - id: THE_TEMPERATURE_FAMILY_FAILS
+    description: softmax(beta x) at beta 2, 0 and -1, and the constant 1/n fill, fail on every case whose output differs from softmax's
+    check:
+      type: unit_test
+      test: tests/unit/props/test_log_ratio_law.py::test_the_temperature_family_and_the_constant_fill_fail_wherever_they_differ
+
+  - id: OUTPUT_PERMUTATIONS_FAIL
+    description: softmax with its rows rolled or its columns reversed fails on every case whose output differs from softmax's
+    check:
+      type: unit_test
+      test: tests/unit/props/test_log_ratio_law.py::test_output_permutations_fail_wherever_they_differ
+
+  - id: THE_BOUND_IS_THIRTY_EPS_PER_UNIT_OF_ROW_RANGE
+    description: a spread just under 30 (1 + row range) eps passes and one just over fails, at two different ranges
+    check:
+      type: unit_test
+      test: tests/unit/props/test_log_ratio_law.py::test_the_bound_is_thirty_eps_per_unit_of_row_range
+
+  - id: A_LARGE_NEGATIVE_MASK_DOES_NOT_LOOSEN_THE_BOUND
+    description: the range is taken over judged entries, so a -1e9 additive mask leaves a wrong kernel failing and a correct one passing
+    check:
+      type: unit_test
+      test: tests/unit/props/test_log_ratio_law.py::test_a_large_negative_mask_does_not_loosen_the_bound
+
+  - id: A_MASKED_ENTRY_CARRIES_NO_MASS
+    description: where the input is -inf in a row with a finite input, any nonzero output fails, and a correct masked softmax passes
+    check:
+      type: unit_test
+      test: tests/unit/props/test_log_ratio_law.py::test_a_masked_entry_must_be_exactly_zero
+
+  - id: AN_UNDERFLOW_MUST_BE_PREDICTED
+    description: a zero or subnormal output at a finite input passes only where the law predicts a value below the smallest normal, so a top-1 kernel fails
+    check:
+      type: unit_test
+      test: tests/unit/props/test_log_ratio_law.py::test_an_output_below_the_smallest_normal_passes_only_where_the_law_predicts_it
+
+  - id: A_NEGATIVE_OUTPUT_FAILS
+    description: a negative output at a finite input fails the law's positivity
+    check:
+      type: unit_test
+      test: tests/unit/props/test_log_ratio_law.py::test_a_negative_output_fails
+
+  - id: A_FULLY_MASKED_ROW_IS_NOT_JUDGED
+    description: a row whose every input is -inf is not judged, whatever it outputs, and a case with no judged row is inconclusive
+    check:
+      type: unit_test
+      test: tests/unit/props/test_log_ratio_law.py::test_a_fully_masked_row_is_not_judged
+
+  - id: UNJUDGEABLE_DATA_IS_INCONCLUSIVE
+    description: an unusable, empty, non-finite or integer output, and a missing, misshapen, complex, NaN or +inf input, are inconclusive and never raise
+    check:
+      type: unit_test
+      test: tests/unit/props/test_log_ratio_law.py::test_unjudgeable_data_is_inconclusive_and_never_raises
+
+  - id: THE_CURRENT_CONTRACT_IS_UNCHANGED
+    description: the current softmax contract still names exactly the four laws every recorded number was measured under
+    check:
+      type: unit_test
+      test: tests/unit/props/test_contract.py::test_softmax_contract_names_the_four_softmax_laws
+
+  - id: THE_COMPLETED_CONTRACT_ADDS_ONLY_THE_LAW
+    description: the completed softmax contract is the current one, criterion for criterion, plus the log-ratio law, and builds an oracle
+    check:
+      type: unit_test
+      test: tests/unit/props/test_contract.py::test_the_completed_softmax_contract_is_the_current_one_plus_the_log_ratio_law
+
+  - id: EVERY_SABOTEUR_IS_RECORDED_UNDER_BOTH_BUNDLES
+    description: every row of the gate's saboteur matrix carries a recorded expectation under the completed bundle as well as the current one
+    check:
+      type: unit_test
+      test: experiments/generation/autoresearch-pbt/test_gate_saboteurs.py::test_every_saboteur_is_recorded_under_both_bundles
+
+  - id: EACH_BUNDLE_PAIRS_EACH_SABOTEUR_WITH_ITS_ARMS
+    description: under each bundle, every saboteur is caught by exactly its recorded arms, through its recorded property
+    check:
+      type: unit_test
+      test: experiments/generation/autoresearch-pbt/test_gate_saboteurs.py::test_each_saboteur_is_caught_by_exactly_its_paired_arms
+
+  - id: THE_COMPLETED_GATE_REJECTS_WHAT_THE_CURRENT_ONE_ADMITS
+    description: the completed gate rejects the temperature family and the fill, which the current gate admits, and admits the correct kernel and fast-exp
+    check:
+      type: unit_test
+      test: experiments/generation/autoresearch-pbt/test_gate_saboteurs.py::test_the_gate_admits_exactly_the_saboteurs_it_is_recorded_admitting

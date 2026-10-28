@@ -352,6 +352,152 @@ class ShiftInvariance:
         return _result(self, Verdict.PASS, f"ratio={ratio:.3g}", group_id=group_id)
 
 
+class RowsHaveConstantLogRatio:
+    """log y - x is constant along each row: the law that ties softmax's output to its input.
+
+    Every other softmax law reads an output alone or compares two outputs, so the bundle without
+    this one admits softmax(beta * x) at every beta and every output permutation. With it, and
+    rows summing to one, softmax is the only kernel left (the paper's Proposition 1(b)). The float
+    form, its threshold and its handling of masked and underflowed entries are fixed in
+    ``specs/features/0014-log-ratio-law/spec.md``; this docstring says only why each check exists.
+
+    In each row an entry is *masked* (x = -inf), *judged* (finite x, y at or above the smallest
+    normal) or *underflowed* (finite x, 0 <= y below it). Four checks, in order:
+
+    1. **Positivity.** A negative output at a finite input. Check 4 would accept one where the law
+       predicts underflow, so this is the only check that sees it there.
+    2. **Masked entries carry no mass.** exp(-inf + k) is 0 for every finite k, so in a row with
+       a finite input any nonzero output at -inf is a leak, whatever its size. A fully masked row
+       is not judged at all: its softmax is 0/0, and what to return there is the contract's call.
+    3. **Spread.** On judged entries, (max d - min d) / ((1 + max x - min x) * eps) < 30, with
+       d = log y - x. A correct kernel's d is off by about u * |x - max x| (the rounding of the
+       max subtraction; twice that via exp2) plus a few ulps of exp, and the row sum's error is a
+       row constant that cancels. So the error grows with the row's range, which the headroom
+       record measured on the A10 at r = 0.92. The range is over *judged* entries only: over the
+       whole row an additive -1e9 mask would make the bound 1e9 times wider and the law vacuous.
+    4. **Underflow is predicted, not excused.** A zero or subnormal output is excluded from the
+       spread, because it has lost relative precision and a flush-to-zero device returns 0 there.
+       But it must sit where the law predicts a value below the smallest normal, within the same
+       budget. Excluded unchecked, a kernel that keeps each row's largest entry and zeros the rest
+       would pass: one judged entry has no spread.
+
+    The threshold is ``DEFAULT_THRESH``, the project's one accuracy budget, chosen before any of
+    this law's numbers existed. Under it fast-exp (17.2) is admitted, as the reference arm already
+    admits it; correct kernels reach at most 1.43 and wrong outputs at least 6.38e6
+    (``docs/measurements/2026-10-14-log-ratio-headroom-prereg.md``).
+
+    A live row with no judged entry (every output below normal) is consistent with the law for a
+    very negative per-row constant, so it is skipped; its row sum is ``rows_sum_to_one``'s finding.
+    """
+
+    name = "rows_have_constant_log_ratio"
+    tier = TIER_PORTABLE
+    tolerance_free = False
+    defers_nonfinite_to = OutputsAreFinite.name
+
+    def check(self, row: ExecutionResult) -> PropertyResult:
+        case_id = row.case.case_id
+        if not _usable(row):
+            return _result(self, Verdict.INCONCLUSIVE, _unusable_detail(row), case_id=case_id)
+        y = row.outputs[OUTPUT_NAME]
+        if reason := _unjudgeable(y):
+            return _result(self, Verdict.INCONCLUSIVE, reason, case_id=case_id)
+        if not np.all(np.isfinite(y)):
+            return _result(self, Verdict.INCONCLUSIVE, _NONFINITE_DETAIL, case_id=case_id)
+        if y.dtype.kind != "f":
+            return _result(self, Verdict.INCONCLUSIVE, _EXACT_DTYPE_DETAIL, case_id=case_id)
+        x = row.case.tensors.get(PRIMARY_INPUT)
+        if x is None or x.shape != y.shape:
+            detail = "no primary input of the output's shape to tie it to"
+            return _result(self, Verdict.INCONCLUSIVE, detail, case_id=case_id)
+        if x.dtype.kind not in "fiu":
+            # A complex input cast to float64 loses its imaginary part, and under
+            # filterwarnings=["error"] the ComplexWarning would abort the pass.
+            detail = f"input dtype {x.dtype} is not real-valued"
+            return _result(self, Verdict.INCONCLUSIVE, detail, case_id=case_id)
+
+        width = y.shape[-1] if y.ndim else 1
+        x2 = np.asarray(x, dtype=np.float64).reshape(-1, width)
+        y2 = np.asarray(y, dtype=np.float64).reshape(-1, width)
+        if np.any(np.isnan(x2) | (x2 == np.inf)):
+            detail = "input contains NaN or +inf; the law is undefined there"
+            return _result(self, Verdict.INCONCLUSIVE, detail, case_id=case_id)
+
+        finite = np.isfinite(x2)
+        live = finite.any(axis=-1, keepdims=True)
+        if (hit := _first(finite & (y2 < 0))) is not None:
+            detail = (
+                f"negative output {y2[hit]:.3g} at row {hit[0]}, column {hit[1]}; the law makes "
+                f"every unmasked output positive"
+            )
+            return _result(self, Verdict.FAIL, detail, case_id=case_id)
+        if (hit := _first(~finite & live & (y2 != 0))) is not None:
+            detail = (
+                f"masked input (x = -inf) has output {y2[hit]:.3g} at row {hit[0]}, "
+                f"column {hit[1]}; exp(-inf + k) is 0"
+            )
+            return _result(self, Verdict.FAIL, detail, case_id=case_id)
+
+        info = np.finfo(y.dtype)
+        eps, tiny = float(info.eps), float(info.tiny)
+        judged = finite & (y2 >= tiny)
+        anchored = judged.any(axis=-1)
+        if not anchored.any():
+            detail = (
+                "no row has an unmasked output at or above the smallest normal; the law has no "
+                "ratio to judge"
+            )
+            return _result(self, Verdict.INCONCLUSIVE, detail, case_id=case_id)
+
+        # Logs of judged entries only: an unjudged entry may be 0, and log(0) warns.
+        d = np.log(np.where(judged, y2, 1.0)) - np.where(judged, x2, 0.0)
+        kappa = np.max(np.where(judged, d, -np.inf), axis=-1)
+        spread = kappa - np.min(np.where(judged, d, np.inf), axis=-1)
+        span = np.max(np.where(judged, x2, -np.inf), axis=-1) - np.min(
+            np.where(judged, x2, np.inf), axis=-1
+        )
+        ratios = np.where(anchored, spread, 0.0) / ((1.0 + np.where(anchored, span, 0.0)) * eps)
+        worst = int(np.argmax(ratios))
+        if not within_threshold(float(ratios[worst])):
+            detail = (
+                f"log-ratio test ratio {ratios[worst]:.3g} >= {DEFAULT_THRESH} at row {worst}: "
+                f"log y - x spreads {spread[worst] / eps:.3g} eps over an input range of "
+                f"{span[worst]:.3g}"
+            )
+            return _result(self, Verdict.FAIL, detail, case_id=case_id)
+
+        rows, cols = np.nonzero(finite & (y2 < tiny) & anchored[:, None])
+        if rows.size:
+            # The law's prediction is log y = x + kappa. Its error grows with the entry's own
+            # distance from the row's maximum, which for an entry near underflow is about 87 in
+            # float32 -- far more than the judged range when the judged entries sit together.
+            # Indexed to underflowed entries only: a fully masked row's maximum is -inf.
+            top = np.max(np.where(finite, x2, -np.inf), axis=-1)
+            xs = x2[rows, cols]
+            predicted = xs + kappa[rows]
+            excess = (predicted - np.log(tiny)) / ((1.0 + top[rows] - xs) * eps)
+            k = int(np.argmax(excess))
+            if not within_threshold(float(excess[k])):
+                # A wrong kernel can put the prediction far above 1 (softmax(-x) on a -1e9
+                # mask predicts e^1e9), and an overflow warning would abort the pass; inf is
+                # the honest rendering.
+                with np.errstate(over="ignore"):
+                    expected = np.exp(predicted[k])
+                detail = (
+                    f"output {y2[rows[k], cols[k]]:.3g} at row {rows[k]}, column {cols[k]} is "
+                    f"below the smallest normal where the law predicts {expected:.3g}"
+                )
+                return _result(self, Verdict.FAIL, detail, case_id=case_id)
+
+        return _result(self, Verdict.PASS, f"ratio={ratios[worst]:.3g}", case_id=case_id)
+
+
+def _first(mask: np.ndarray) -> tuple[int, int] | None:
+    """The (row, column) of the first True entry, in row-major order, or None."""
+    hits = np.argwhere(mask)
+    return (int(hits[0][0]), int(hits[0][1])) if hits.size else None
+
+
 class RowsHaveZeroMean:
     """Each row of a layernorm output has approximately zero mean.
 
@@ -499,6 +645,7 @@ CASE_PROPERTY_REGISTRY: dict[str, type[CaseProperty]] = {
         OutputsAreFinite,
         ValuesInUnitInterval,
         RowsSumToOne,
+        RowsHaveConstantLogRatio,
         RowsHaveZeroMean,
         RowsHaveUnitVariance,
     )
