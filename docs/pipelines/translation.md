@@ -141,7 +141,7 @@ a port.
 | A **HIP backend**, then a **TPU backend** (Pallas/JAX) or an **NKI backend** | **gap**: later targets, in priority order |
 | A **cross-backend tolerance**: the `log2 n` ratio assumes pairwise reduction on *one* backend | **not yet needed for the ladder**: in TE1 the single-backend ratio accepts the correct port with a largest ratio of 0.986, against a threshold of 30. TE2 measures it more widely |
 | **Numerical characterization of the target** (rounding mode, accumulation order, accumulator width) | **gap**: none is published for Trainium (design open question 3). TPU matrix-unit precision modes are documented, but per-kernel accumulation is not |
-| **Completed law bundles** (log-ratio, affine-tie) | **gap**: E2. T2 is unsafe without them, because the current bundles admit wrong kernels (four recorded families, six more probed) |
+| **Completed law bundles** (log-ratio, affine-tie) | **built and measured offline** (features 0014 and 0015), with the gate's default still on the current bundles, which admit wrong kernels. T2 is unsafe until a translation gate selects the completed ones |
 | A **translation mutation corpus**: plausible wrong ports | **gap**: see TE3 |
 | A **benchmark on the target**, so a port is kept only if it meets the performance bar | **gap**: wall-clock is recorded per row, which is not a benchmark |
 | Formal adapters (0010), so an *agent's* proof in each language is checked against two backends' recorded cases | **gap** |

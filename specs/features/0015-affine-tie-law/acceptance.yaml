@@ -1,0 +1,94 @@
+feature_id: "0015"
+feature_name: affine-tie-law
+version: 1
+
+criteria:
+  - id: A_CORRECT_LAYERNORM_PASSES
+    description: the reference and the float32 stock kernel pass on every ladder case, and on rows far wider and more offset than the gate draws
+    check:
+      type: unit_test
+      test: tests/unit/props/test_affine_tie_law.py::test_a_correct_layernorm_passes_on_every_ladder_case_and_on_wide_rows
+
+  - id: OUTPUT_PERMUTATIONS_AND_SORTING_FAIL
+    description: layernorm with its columns reversed, its rows sorted or its rows rolled fails on every case whose output differs from the reference's
+    check:
+      type: unit_test
+      test: tests/unit/props/test_affine_tie_law.py::test_permutations_and_sorting_fail_wherever_they_differ
+
+  - id: NEGATION_FAILS_ONLY_BY_ITS_SLOPE
+    description: -LN has an exact tie, so it passes check 1 and fails check 2 on every multi-column case
+    check:
+      type: unit_test
+      test: tests/unit/props/test_affine_tie_law.py::test_negation_has_an_exact_tie_and_fails_by_its_slope
+
+  - id: A_FLAT_OUTPUT_ON_A_VARYING_ROW_FAILS
+    description: an all-zero output of a varying input has no residual and fails by its slope
+    check:
+      type: unit_test
+      test: tests/unit/props/test_affine_tie_law.py::test_a_flat_output_on_a_varying_row_fails_by_its_slope
+
+  - id: THE_BOUND_IS_THIRTY_EPS_OF_THE_LARGEST_OUTPUT
+    description: a residual just under 30 eps max|y| passes and one just over fails, at two different output scales
+    check:
+      type: unit_test
+      test: tests/unit/props/test_affine_tie_law.py::test_the_bound_is_thirty_eps_of_the_largest_output
+
+  - id: THE_SLOPE_AND_INTERCEPT_ARE_FREE
+    description: any increasing affine function of the row passes, the undivided kernel included, whatever its slope and intercept
+    check:
+      type: unit_test
+      test: tests/unit/props/test_affine_tie_law.py::test_any_increasing_affine_function_of_the_row_passes
+
+  - id: A_CONSTANT_ROW_MUST_BE_FLAT
+    description: on a constant input a flat output passes and a varying one fails, and a one-column row passes
+    check:
+      type: unit_test
+      test: tests/unit/props/test_affine_tie_law.py::test_a_constant_input_must_give_a_flat_output
+
+  - id: THE_BUDGET_IS_THE_OUTPUTS_DTYPE
+    description: a residual that float32's eps allows fails when the output is float64
+    check:
+      type: unit_test
+      test: tests/unit/props/test_affine_tie_law.py::test_the_budget_is_the_outputs_dtype
+
+  - id: UNJUDGEABLE_DATA_IS_INCONCLUSIVE
+    description: an unusable, empty, non-finite or integer output, a missing, misshapen, complex, NaN or infinite input, and values too large to compute with, are inconclusive and never raise
+    check:
+      type: unit_test
+      test: tests/unit/props/test_affine_tie_law.py::test_unjudgeable_data_is_inconclusive_and_never_raises
+
+  - id: THE_CURRENT_CONTRACT_IS_UNCHANGED
+    description: the current layernorm contract still names exactly the four laws every recorded number was measured under
+    check:
+      type: unit_test
+      test: tests/unit/props/test_contract.py::test_layernorm_contract_names_the_four_layernorm_laws
+
+  - id: THE_COMPLETED_CONTRACT_ADDS_ONLY_THE_LAW
+    description: the completed layernorm contract is the current one, criterion for criterion, plus the affine-tie law, and builds an oracle
+    check:
+      type: unit_test
+      test: tests/unit/props/test_contract.py::test_the_completed_layernorm_contract_is_the_current_one_plus_the_affine_tie_law
+
+  - id: EVERY_LAYERNORM_SABOTEUR_IS_RECORDED_UNDER_BOTH_BUNDLES
+    description: every row of the layernorm saboteur matrix carries a recorded expectation under each bundle
+    check:
+      type: unit_test
+      test: experiments/generation/autoresearch-pbt/test_gate_saboteurs.py::test_every_layernorm_saboteur_is_recorded_under_both_bundles
+
+  - id: EACH_BUNDLE_PAIRS_EACH_LAYERNORM_SABOTEUR_WITH_ITS_ARMS
+    description: under each bundle, every layernorm saboteur is caught by exactly its recorded arms, through its recorded property
+    check:
+      type: unit_test
+      test: experiments/generation/autoresearch-pbt/test_gate_saboteurs.py::test_each_layernorm_saboteur_is_caught_by_exactly_its_paired_arms
+
+  - id: THE_COMPLETED_GATE_REJECTS_WHAT_THE_CURRENT_ONE_ADMITS
+    description: the completed gate rejects -LN, reversed columns, sorted rows and rolled rows, which the current gate admits, and admits the correct kernel
+    check:
+      type: unit_test
+      test: experiments/generation/autoresearch-pbt/test_gate_saboteurs.py::test_the_gate_admits_exactly_the_layernorm_saboteurs_it_is_recorded_admitting
+
+  - id: A_LAYERNORM_DECLARATIVE_PASS_IS_A_JUDGEMENT
+    description: every declarative result on a row the arm passes is a PASS, except the unit-variance law's four named abstentions on the single-column rungs
+    check:
+      type: unit_test
+      test: experiments/generation/autoresearch-pbt/test_gate_saboteurs.py::test_a_layernorm_declarative_pass_is_a_judgement_not_an_abstention

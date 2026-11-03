@@ -54,6 +54,7 @@ import yaml
 
 from autokernel_pbt.props.backends.numpy_backend import NumpyBackend
 from autokernel_pbt.props.contract import (
+    COMPLETED_CONTRACT_FILENAME,
     CONTRACT_FILENAME,
     CONTRACT_VERSION,
     KERNEL_TASKS_DIR,
@@ -71,6 +72,10 @@ from autokernel_pbt.props.properties import (
     CASE_PROPERTY_REGISTRY,
     GROUP_PROPERTY_REGISTRY,
     OutputsAreFinite,
+    RowsHaveAffineTie,
+    RowsHaveConstantLogRatio,
+    RowsHaveUnitVariance,
+    RowsHaveZeroMean,
     RowsSumToOne,
     ShiftInvariance,
     ValuesInUnitInterval,
@@ -170,6 +175,65 @@ def test_softmax_contract_names_the_four_softmax_laws(repo_root: Path):
     assert all(c.description.strip() for c in contract.criteria), (
         "the description is the spec half of the contract; an empty one is not a spec"
     )
+
+
+def test_the_completed_softmax_contract_is_the_current_one_plus_the_log_ratio_law(repo_root: Path):
+    """Feature 0014: the two softmax bundles differ by exactly the law E2 measures.
+
+    The current contract is the one every recorded number was measured under; the completed one
+    is E2's new gate. Equality over whole ``Criterion`` records, descriptions included, so a
+    criterion reworded, reordered or dropped in either file fails here instead of making the two
+    bundles differ by more than one law. The completed file sits outside the one-contract-per-task
+    walk, so neither the driver nor a recorded run can score it by accident.
+    """
+    current = _softmax_contract(repo_root)
+    path = repo_root / KERNEL_TASKS_DIR / "softmax" / COMPLETED_CONTRACT_FILENAME
+    completed = load_contract(path)
+    assert completed.task_id == current.task_id
+    assert completed.criteria[:-1] == current.criteria
+    assert completed.property_names[-1] == RowsHaveConstantLogRatio.name
+    assert [p.name for p in oracle_from_contract(completed).case_properties] == [
+        OutputsAreFinite.name,
+        ValuesInUnitInterval.name,
+        RowsSumToOne.name,
+        RowsHaveConstantLogRatio.name,
+    ]
+    assert path not in contract_paths(repo_root)
+
+
+def _layernorm_contract(repo_root: Path) -> Contract:
+    return load_contract(repo_root / KERNEL_TASKS_DIR / "layernorm" / CONTRACT_FILENAME)
+
+
+def test_layernorm_contract_names_the_four_layernorm_laws(repo_root: Path):
+    contract = _layernorm_contract(repo_root)
+    assert contract.task_id == "layernorm"
+    assert contract.property_names == (
+        OutputsAreFinite.name,
+        RowsHaveZeroMean.name,
+        RowsHaveUnitVariance.name,
+        ShiftInvariance.name,
+    )
+
+
+def test_the_completed_layernorm_contract_is_the_current_one_plus_the_affine_tie_law(
+    repo_root: Path,
+):
+    """Feature 0015: the two layernorm bundles differ by exactly the law E2 measures, for the
+    reasons softmax's test above gives."""
+    current = _layernorm_contract(repo_root)
+    path = repo_root / KERNEL_TASKS_DIR / "layernorm" / COMPLETED_CONTRACT_FILENAME
+    completed = load_contract(path)
+    assert completed.task_id == current.task_id
+    assert completed.criteria[:-1] == current.criteria
+    assert completed.property_names[-1] == RowsHaveAffineTie.name
+    assert [p.name for p in oracle_from_contract(completed).case_properties] == [
+        OutputsAreFinite.name,
+        RowsHaveZeroMean.name,
+        RowsHaveUnitVariance.name,
+        RowsHaveAffineTie.name,
+    ]
+    assert path not in contract_paths(repo_root)
 
 
 def test_relu_contract_names_only_the_law_relu_obeys(repo_root: Path):

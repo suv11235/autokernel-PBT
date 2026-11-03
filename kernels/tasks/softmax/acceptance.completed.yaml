@@ -1,0 +1,47 @@
+# The COMPLETED acceptance contract for the softmax task (feature 0014, E2).
+#
+# It is `acceptance.yaml`, criterion for criterion, plus the log-ratio law, last.
+# `tests/unit/props/test_contract.py::test_the_completed_softmax_contract_is_the_current_one_
+# plus_the_log_ratio_law` pins exactly that, so the two bundles cannot drift apart by more than
+# the law E2 measures. The current file stays what every recorded number was measured under;
+# this one is chosen explicitly (`pbt_gate.check_task(..., bundle="completed")`), and
+# `contract_paths` does not walk it, so the driver never scores it by accident.
+#
+# Why the law: every criterion above LOG_RATIO reads an output alone or compares two outputs,
+# so they admit softmax(beta * x) at every beta and every output permutation. LOG_RATIO ties
+# the output to its input, and with ROW_SUMS it leaves softmax alone (the paper's
+# Proposition 1(b)). Its float form and tolerance are in
+# specs/features/0014-log-ratio-law/spec.md.
+task_id: softmax
+version: 1
+
+criteria:
+  - id: FINITE_OUTPUT
+    description: no output element is NaN or Inf, on any input the domain generates
+    check:
+      type: property
+      property: outputs_are_finite
+
+  - id: UNIT_INTERVAL
+    description: every output element is a probability, lying in [0, 1] exactly
+    check:
+      type: property
+      property: values_in_unit_interval
+
+  - id: ROW_SUMS
+    description: each row of the output sums to one within its dtype's rounding budget
+    check:
+      type: property
+      property: rows_sum_to_one
+
+  - id: SHIFT_INVARIANCE
+    description: adding a per-row constant to the input leaves the output unchanged
+    check:
+      type: property
+      property: shift_invariance
+
+  - id: LOG_RATIO
+    description: in each row, log y - x is the same for every entry, within 30 eps per unit of the row's input range; a masked input gets exactly zero
+    check:
+      type: property
+      property: rows_have_constant_log_ratio

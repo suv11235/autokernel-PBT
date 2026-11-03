@@ -43,6 +43,10 @@ the paths inside the records were updated to match. Nothing else in a record was
 |---|---|
 | [2026-08-18-autoresearch-loop-pbt-gate](./2026-08-18-autoresearch-loop-pbt-gate.md) | Property-gated loop: −21.2% val_bpb, 0 gate rejections, 6 saboteurs caught |
 | [2026-10-01-softmax-temperature-blind-spot](./2026-10-01-softmax-temperature-blind-spot.md) | The decisive arm admits softmax(βx), 1/n and softmax(−x) |
+| [2026-10-14-log-ratio-headroom-prereg](./2026-10-14-log-ratio-headroom-prereg.md) | One log-ratio threshold (30 eps) separates every correct softmax, A10 runs included, from every wrong one; device headroom shrinks with row range |
+| [2026-10-14-e2-log-ratio-law-prereg](./2026-10-14-e2-log-ratio-law-prereg.md) | E2, softmax: the log-ratio law rejects every family the gate admitted, with no new false positive; fast-exp admitted only on the gate's domain |
+| [2026-11-02-affine-tie-headroom-prereg](./2026-11-02-affine-tie-headroom-prereg.md) | One affine-tie threshold (30) with a positive slope separates every correct layernorm, device runs included, from every wrong one; no range term needed |
+| [2026-11-02-e2-affine-tie-law-prereg](./2026-11-02-e2-affine-tie-law-prereg.md) | E2, layernorm: the affine-tie law rejects every family the gate admitted, with no new false positive; worst correct 0.853 against 30 across nine decades of scale |
 
 ## Formal verification
 

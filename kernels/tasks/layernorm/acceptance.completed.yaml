@@ -1,0 +1,47 @@
+# The COMPLETED acceptance contract for the layernorm task (feature 0015, E2).
+#
+# It is `acceptance.yaml`, criterion for criterion, plus the affine-tie law, last.
+# `tests/unit/props/test_contract.py::test_the_completed_layernorm_contract_is_the_current_one_
+# plus_the_affine_tie_law` pins exactly that, so the two bundles cannot drift apart by more than
+# the law E2 measures. The current file stays what every recorded number was measured under;
+# this one is chosen explicitly (`pbt_gate.check_task(..., bundle="completed")`), and
+# `contract_paths` does not walk it, so the driver never scores it by accident.
+#
+# Why the law: every criterion above AFFINE_TIE reads an output alone or compares two outputs,
+# so they admit -LN, every output permutation and row-wise sorting. AFFINE_TIE ties the output to
+# its input, and with ZERO_MEAN and UNIT_VARIANCE it leaves LN alone on every non-constant row
+# (the paper's Proposition 1(c)). Its float form and tolerance are in
+# specs/features/0015-affine-tie-law/spec.md.
+task_id: layernorm
+version: 1
+
+criteria:
+  - id: FINITE_OUTPUT
+    description: no output element is NaN or Inf, on any input the domain generates
+    check:
+      type: property
+      property: outputs_are_finite
+
+  - id: ZERO_MEAN
+    description: each row of the output has zero mean within its dtype's rounding budget
+    check:
+      type: property
+      property: rows_have_zero_mean
+
+  - id: UNIT_VARIANCE
+    description: each row has unit population variance, except rows a constant input zeroed
+    check:
+      type: property
+      property: rows_have_unit_variance
+
+  - id: SHIFT_INVARIANCE
+    description: adding a per-row constant to the input leaves the output unchanged
+    check:
+      type: property
+      property: shift_invariance
+
+  - id: AFFINE_TIE
+    description: in each row, the output is an increasing affine function of the input, within 30 eps of the row's largest output
+    check:
+      type: property
+      property: rows_have_affine_tie

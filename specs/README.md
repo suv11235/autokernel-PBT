@@ -24,6 +24,8 @@ Every feature starts as a **spec** before code. Tests are written from **accepta
 | [0009](./features/0009-formal-core/spec.md) | Formal adherence core | implemented |
 | [0012](./features/0012-cuda-backend/spec.md) | CUDA backend (NVRTC) and the CUDA ports of the ladder | implemented, CPU-tested; device path unexercised |
 | [0013](./features/0013-cross-setup-scoring/spec.md) | Cross-setup scoring: a port against the known kernel's recording | implemented |
+| [0014](./features/0014-log-ratio-law/spec.md) | The log-ratio law, softmax's completing law (E2) | implemented |
+| [0015](./features/0015-affine-tie-law/spec.md) | The affine-tie law, layernorm's completing law (E2) | implemented |
 
 0010 and 0011 are reserved for the formal track's pilot adapters and pilot run (ADR 0002).
 

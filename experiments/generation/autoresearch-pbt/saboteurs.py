@@ -30,7 +30,18 @@ unchanged on purpose. Completing the bundle is a separate experiment; when it la
 ``test_gate_saboteurs.py`` is meant to fail, and the rows are re-recorded deliberately,
 never loosened until they pass.
 
-    python saboteurs.py     prints the matrix as measured, with the log-ratio column
+E2 (feature 0014) added the completed bundle: the current one plus the log-ratio law. The
+current rows stay as measured, and ``COMPLETED`` records every row again under the completed
+bundle (``docs/measurements/2026-10-14-e2-log-ratio-law-prereg.md``). The gate's default is
+still the current bundle.
+
+E2's second half (feature 0015) adds layernorm's rows, ``LAYERNORM_SABOTEURS``, under both bundles:
+the reference, the four families Proposition 1(c) names, and the undivided positive control. They
+sit in their own table, so the softmax record's script keeps printing the same bytes. See
+``docs/measurements/2026-11-02-e2-affine-tie-law-prereg.md``.
+
+    python saboteurs.py     prints the matrix as measured, under each bundle, with the
+                            log-ratio column on softmax's rows
 """
 
 from __future__ import annotations
@@ -53,7 +64,13 @@ from autokernel_pbt.props.oracle import (
     HybridOracle,
     ReferenceOracle,
 )
-from autokernel_pbt.props.properties import RowsSumToOne
+from autokernel_pbt.props.properties import (
+    RowsHaveAffineTie,
+    RowsHaveConstantLogRatio,
+    RowsHaveUnitVariance,
+    RowsSumToOne,
+)
+from autokernel_pbt.props.tasks import layernorm_reference
 
 HERE = Path(__file__).resolve().parent
 
@@ -196,6 +213,141 @@ SABOTEURS: dict[str, Saboteur] = {
     ),
 }
 
+# The completed bundle's verdicts. A family the current bundle admits now fails the law on the
+# same seven groups the reference catches it on; the hybrid arm attributes it to the law, because
+# its declarative half fails first and short-circuits the reference.
+_CAUGHT_BY_THE_LOG_RATIO_LAW = {
+    ALLCLOSE: (7, ALLCLOSE_PROPERTY),
+    REFERENCE: (7, REFERENCE_PROPERTY),
+    DECLARATIVE: (7, RowsHaveConstantLogRatio.name),
+    HYBRID: (7, RowsHaveConstantLogRatio.name),
+}
+_CAUGHT_THROUGH_ROW_SUMS = {
+    ALLCLOSE: (7, ALLCLOSE_PROPERTY),
+    REFERENCE: (7, REFERENCE_PROPERTY),
+    DECLARATIVE: (7, RowsSumToOne.name),
+    HYBRID: (7, RowsSumToOne.name),
+}
+
+#: Every row of ``SABOTEURS`` again, under the completed bundle: (expected, admitted). Kept beside
+#: the current rows rather than in them, so the current record stays exactly as measured.
+COMPLETED: dict[str, tuple[Mapping[str, tuple[int, str]], bool]] = {
+    "beta_1_correct": (_CAUGHT_BY_NO_ARM, True),
+    "beta_2": (_CAUGHT_BY_THE_LOG_RATIO_LAW, False),
+    "beta_0": (_CAUGHT_BY_THE_LOG_RATIO_LAW, False),
+    "beta_minus_1": (_CAUGHT_BY_THE_LOG_RATIO_LAW, False),
+    "uniform_fill": (_CAUGHT_BY_THE_LOG_RATIO_LAW, False),
+    # Admitted: its ratio is 17.2 against the stated budget of 30 (feature 0014's spec).
+    "fast_exp": (_CAUGHT_BY_NO_ARM, True),
+    # Its log-ratios are exact, so the law passes it and the row-sum law still catches it.
+    "unnormalized_positive_control": (_CAUGHT_THROUGH_ROW_SUMS, False),
+}
+
+
+def _after_layernorm(symmetry: Callable[[np.ndarray], np.ndarray]) -> Callable:
+    """The reference's output with one symmetry applied, so the row is wrong through it alone.
+
+    The parameter is named ``x`` because the backend calls ``kernel(**inputs)``. Contiguous, so a
+    reversed view cannot reach the backend as a negative stride.
+    """
+
+    def kernel(x: np.ndarray) -> np.ndarray:
+        return np.ascontiguousarray(symmetry(layernorm_reference(x)))
+
+    return kernel
+
+
+def layernorm_undivided(x: np.ndarray) -> np.ndarray:
+    """Positive control: the row centered and never divided. Its tie is exact, with slope 1, so it
+    is the mirror image of the families below: the completing law passes it and the unit-variance
+    law catches it, which shows the declarative arm is live on these cases."""
+    wide = np.asarray(x, dtype=np.float64)
+    return (wide - np.mean(wide, axis=-1, keepdims=True)).astype(x.dtype)
+
+
+def _caught_against_a_reference(groups: int) -> dict[str, tuple[int, str]]:
+    return {
+        ALLCLOSE: (groups, ALLCLOSE_PROPERTY),
+        REFERENCE: (groups, REFERENCE_PROPERTY),
+        DECLARATIVE: (0, ""),
+        HYBRID: (groups, REFERENCE_PROPERTY),
+    }
+
+
+def _caught_through(groups: int, law: str) -> dict[str, tuple[int, str]]:
+    """The declarative arm catches it through ``law``, and the hybrid arm through the same law,
+    because its declarative half fails first and short-circuits."""
+    return {
+        ALLCLOSE: (groups, ALLCLOSE_PROPERTY),
+        REFERENCE: (groups, REFERENCE_PROPERTY),
+        DECLARATIVE: (groups, law),
+        HYBRID: (groups, law),
+    }
+
+
+# Seven of nine at most, on the same two single-column rungs: a one-element layernorm is 0.0
+# whatever symmetry is applied. Rolling rows is also the identity on the single-row rung (1, 64).
+LAYERNORM_SABOTEURS: dict[str, Saboteur] = {
+    "ln_correct": Saboteur(
+        "LN(x), the reference", "layernorm", layernorm_reference, _CAUGHT_BY_NO_ARM, admitted=True
+    ),
+    "ln_negated": Saboteur(
+        "-LN(x)",
+        "layernorm",
+        _after_layernorm(np.negative),
+        _caught_against_a_reference(7),
+        admitted=True,
+    ),
+    "ln_columns_reversed": Saboteur(
+        "LN, columns reversed",
+        "layernorm",
+        _after_layernorm(lambda y: y[..., ::-1]),
+        _caught_against_a_reference(7),
+        admitted=True,
+    ),
+    "ln_rows_sorted": Saboteur(
+        "LN, each row sorted",
+        "layernorm",
+        _after_layernorm(lambda y: np.sort(y, axis=-1)),
+        _caught_against_a_reference(7),
+        admitted=True,
+    ),
+    "ln_rows_rolled": Saboteur(
+        "LN, rows rolled by one",
+        "layernorm",
+        _after_layernorm(lambda y: np.roll(y, 1, axis=-2)),
+        _caught_against_a_reference(6),
+        admitted=True,
+    ),
+    "ln_undivided_positive_control": Saboteur(
+        "x - mean, never divided",
+        "layernorm",
+        layernorm_undivided,
+        _caught_through(7, RowsHaveUnitVariance.name),
+        admitted=False,
+    ),
+}
+
+#: Every layernorm row again, under the completed bundle: (expected, admitted).
+LAYERNORM_COMPLETED: dict[str, tuple[Mapping[str, tuple[int, str]], bool]] = {
+    "ln_correct": (_CAUGHT_BY_NO_ARM, True),
+    "ln_negated": (_caught_through(7, RowsHaveAffineTie.name), False),
+    "ln_columns_reversed": (_caught_through(7, RowsHaveAffineTie.name), False),
+    "ln_rows_sorted": (_caught_through(7, RowsHaveAffineTie.name), False),
+    "ln_rows_rolled": (_caught_through(6, RowsHaveAffineTie.name), False),
+    # Its tie is exact, so the law passes it and the unit-variance law still catches it.
+    "ln_undivided_positive_control": (_caught_through(7, RowsHaveUnitVariance.name), False),
+}
+
+#: The declarative results that are not a PASS on a layernorm row the arm passes: (law, case id),
+#: all INCONCLUSIVE. The unit-variance law has nothing to judge where every row is a constant
+#: input, the single-column rungs, base case and partner. The affine-tie law judges those.
+LAYERNORM_ABSTENTIONS: frozenset[tuple[str, str]] = frozenset(
+    (RowsHaveUnitVariance.name, f"layernorm-{group}-base{partner}")
+    for group in ("g00006", "g00008")
+    for partner in ("", "::shift_rows")
+)
+
 #: ``pbt_gate.check_task`` writes ``f"{group_id} shape={shape} {property}: {detail}"``.
 _FIRST_FAILURE = re.compile(r"\S+ shape=\([^)]*\) (?P<property>\w+): ")
 
@@ -246,20 +398,34 @@ def main() -> None:
         f"numpy {np.__version__}, "
         f"GATE_SEED={pbt_gate.GATE_SEED}, GATE_GROUPS={pbt_gate.GATE_GROUPS}"
     )
-    print("| row | kernel | " + " | ".join(arms) + " | gate | log-ratio spread (eps) |")
-    print("|---" * (len(arms) + 4) + "|")
-    for name, saboteur in SABOTEURS.items():
-        verdict = pbt_gate.check_task(saboteur.kernel, saboteur.task)
-        cells = {a.arm: a for a in verdict.arms}
-        shown = [
-            f"{cells[arm].verdict} {cells[arm].groups_failed}/{cells[arm].groups_total}"
-            + (f" ({first_failing_property(cells[arm])})" if cells[arm].groups_failed else "")
-            for arm in arms
-        ]
-        gate = "admits" if verdict.passed else "rejects"
-        spread = log_ratio_spread_eps(saboteur.kernel, saboteur.task)
-        row = [name, saboteur.label, *shown, gate, f"{spread:.3g}"]
-        print("| " + " | ".join(row) + " |")
+    for bundle in pbt_gate.BUNDLES:
+        print(f"\n### {bundle} bundle\n")
+        print("| row | kernel | " + " | ".join(arms) + " | gate | log-ratio spread (eps) |")
+        print("|---" * (len(arms) + 4) + "|")
+        for name, saboteur in SABOTEURS.items():
+            verdict = pbt_gate.check_task(saboteur.kernel, saboteur.task, bundle=bundle)
+            cells = {a.arm: a for a in verdict.arms}
+            shown = [
+                f"{cells[arm].verdict} {cells[arm].groups_failed}/{cells[arm].groups_total}"
+                + (f" ({first_failing_property(cells[arm])})" if cells[arm].groups_failed else "")
+                for arm in arms
+            ]
+            gate = "admits" if verdict.passed else "rejects"
+            spread = log_ratio_spread_eps(saboteur.kernel, saboteur.task)
+            row = [name, saboteur.label, *shown, gate, f"{spread:.3g}"]
+            print("| " + " | ".join(row) + " |")
+        print("\n| row | kernel | " + " | ".join(arms) + " | gate |")
+        print("|---" * (len(arms) + 3) + "|")
+        for name, saboteur in LAYERNORM_SABOTEURS.items():
+            verdict = pbt_gate.check_task(saboteur.kernel, saboteur.task, bundle=bundle)
+            cells = {a.arm: a for a in verdict.arms}
+            shown = [
+                f"{cells[arm].verdict} {cells[arm].groups_failed}/{cells[arm].groups_total}"
+                + (f" ({first_failing_property(cells[arm])})" if cells[arm].groups_failed else "")
+                for arm in arms
+            ]
+            gate = "admits" if verdict.passed else "rejects"
+            print("| " + " | ".join([name, saboteur.label, *shown, gate]) + " |")
 
 
 if __name__ == "__main__":
