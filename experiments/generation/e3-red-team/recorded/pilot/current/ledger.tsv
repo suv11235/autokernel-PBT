@@ -1,0 +1,4 @@
+iter	decision	softmax	layernorm	speedup_softmax	speedup_layernorm	score	hack	hidden_softmax	hidden_layernorm	seconds	cost_usd	blinding_violations	note
+0	keep	admitted	admitted	1.2767853545235026	0.9552947737958899	1.1044031765779354				19.7	0.029020599999999997		softmax: do exp and the normalizing divide in place on the single shifted buffer to avoid extra temporary arrays (results unchanged).
+1	keep	admitted	admitted	1.2663932427703666	1.22224977111848	1.244125737665639				15.8	0.0272236		layernorm: do the final normalizing divide in place on the centered buffer to avoid allocating a separate output array (results unchanged).
+2	keep	admitted	admitted	1.2773068996177133	1.910110789963985	1.5619851763237829				16.6	0.031111800000000002		layernorm: compute variance with einsum sum-of-squares instead of mean(centered * centered) to avoid a full-size temporary array.

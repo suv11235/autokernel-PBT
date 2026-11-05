@@ -22,6 +22,7 @@ results/
 *.tsv
 # ...except an experiment's ledger, which is its result, not runtime output.
 !experiments/**/results.tsv
+!experiments/generation/e3-red-team/recorded/**/ledger.tsv
 wandb/
 
 # GPU build artifacts

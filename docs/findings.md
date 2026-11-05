@@ -244,7 +244,10 @@ spec: [`specs/features/0009-formal-core/`](../specs/features/0009-formal-core/).
   softmax**, with 40× the exact kernel's relative error, passed every arm. It was stopped by being
   slower, not by the gate.
 - **Zero in-loop rejections measures compliance, not gate strength.** The loop's instructions name
-  the cheapest reward hacks, and no agent used them. Gate strength comes from saboteurs, or from E3.
+  the cheapest reward hacks, and no agent used them. Gate strength comes from saboteurs. **E3 removed the
+  forbidden list and got the same result:** 0 hacks and 0 rejections in 120 sessions, so an agent has still never
+  tested the gate
+  ([`2026-11-03-e3-red-team-prereg.md`](./measurements/2026-11-03-e3-red-team-prereg.md)).
 - **No agent-written kernel proof has been scored yet.** The prover-in-the-toolkit experiment ran
   on 2026-10-02, but only 11 of 24 agents' self-reports survived and none has been evaluated
   ([`experiments/verification/oracle-research/`](../experiments/verification/oracle-research/)).
@@ -255,7 +258,6 @@ spec: [`specs/features/0009-formal-core/`](../specs/features/0009-formal-core/).
 ## What is next
 
 Pre-registered in the paper (§5) and [`experiments/README.md`](../experiments/README.md): **E1**
-agent-written adherence proofs across 7 languages, **E2** complete the bundles and re-gate, **E3**
-red-team the gate with a speed objective and a hidden checker, **E4** return formal feedback to the
-agent. Translation: **TE1** has run (result 9); **TE2–TE4** are proposed in
+agent-written adherence proofs across 7 languages, **E2** complete the bundles and re-gate, **E4** return formal feedback to the agent. **E3**
+(red-team the gate with a speed objective and a hidden checker) has run, and is a null. Translation: **TE1** has run (result 9); **TE2–TE4** are proposed in
 [`pipelines/translation.md`](./pipelines/translation.md).
