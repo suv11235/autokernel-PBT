@@ -248,6 +248,10 @@ spec: [`specs/features/0009-formal-core/`](../specs/features/0009-formal-core/).
   forbidden list and got the same result:** 0 hacks and 0 rejections in 120 sessions, so an agent has still never
   tested the gate
   ([`2026-11-03-e3-red-team-prereg.md`](./measurements/2026-11-03-e3-red-team-prereg.md)).
+- **The gate can be beaten without touching its laws.** Hand-built kernels that specialize on the timing shape, the gate's
+  seed or a call count get past both bundles, and a kernel can replace the gate from inside its own process, because
+  `pbt_gate` runs the candidate in-process
+  ([`2026-11-04-e3b-instructed-red-team-prereg.md`](./measurements/2026-11-04-e3b-instructed-red-team-prereg.md), §2).
 - **No agent-written kernel proof has been scored yet.** The prover-in-the-toolkit experiment ran
   on 2026-10-02, but only 11 of 24 agents' self-reports survived and none has been evaluated
   ([`experiments/verification/oracle-research/`](../experiments/verification/oracle-research/)).
