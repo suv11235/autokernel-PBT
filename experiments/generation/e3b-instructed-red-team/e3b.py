@@ -9,7 +9,7 @@ that recording with the unmodified gate and the hidden checker, in a process tha
 
     python e3b.py control             the positive control: scripted agents, no model
     python e3b.py probe               check that one real session is isolated, and what it costs
-    python e3b.py run ARM R [-n N]    one replicate (R is r1, r2, r3 or pilot); re-running resumes
+    python e3b.py run ARM R [-n N]    one replicate (R is r1, r2, r3, pilot or pilot2); re-running resumes
     python e3b.py all [-n N]          every replicate, rotating A-r1, B-r1, C-r1, A-r2, ...
     python e3b.py report              every registered measure, from the results
 """
@@ -904,9 +904,10 @@ def main() -> None:
         try:
             for arm, replicate in order:
                 # A pilot sits apart, where the report does not read it: it is not counted.
+                # The second, after arm C's fix, is pilot2.
                 directory = (
-                    RESULTS / "pilot" / arm
-                    if replicate == "pilot"
+                    RESULTS / "pilot" / (arm if replicate == "pilot" else f"{arm}-{replicate}")
+                    if replicate.startswith("pilot")
                     else RESULTS / f"{arm}-{replicate}"
                 )
                 rows = run_replicate(directory, arm, claude_agent, args.n)
