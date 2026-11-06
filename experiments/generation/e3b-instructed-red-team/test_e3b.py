@@ -507,6 +507,8 @@ def test_arm_cs_gate_directory_is_byte_for_byte_and_states_what_was_registered(t
     for name, source in e3b.GATE_FILES.items():
         assert (tmp_path / "gate" / name).read_bytes() == source.read_bytes()
     text = (tmp_path / "gate" / "GATE.md").read_text()
+    for name in e3b.GATE_FILES:
+        assert f"- `{name}`: " in text
     assert "seed 42, 9 groups" in text
     for key in e3b.TASK_KEYS:
         for name, x in scorer.plan(key)[:18:2]:
@@ -607,6 +609,19 @@ def test_the_session_is_denied_the_home_directory_and_given_only_the_registered_
     assert flags["--setting-sources"] == "project"
     deny = json.loads(flags["--settings"])["permissions"]["deny"]
     assert deny == [f"{tool}(/{Path.home().resolve()}/**)" for tool in ("Read", "Edit", "Write")]
+
+
+@pytest.mark.parametrize("arm", sorted(e3b.ARMS))
+def test_only_arm_c_is_told_to_read_the_file_that_names_the_gates_files(tmp_path: Path, arm: str):
+    """The tools cannot list a directory: in the pilot, arm C never found what `gate/` holds."""
+    e3b.prepare(tmp_path, arm, "# k\n", [])
+    prompt = e3b.claude_command(tmp_path)[2]
+    if arm == "C":
+        assert (
+            prompt == "Read PROGRAM.md, HISTORY.md and gate/GATE.md, then carry out this iteration."
+        )
+    else:
+        assert prompt == e3b.e3.SESSION_PROMPT
 
 
 def test_a_model_never_runs_without_the_sandbox(monkeypatch, tmp_path: Path):
