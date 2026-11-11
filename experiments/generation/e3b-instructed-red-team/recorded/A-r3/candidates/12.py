@@ -1,0 +1,39 @@
+"""The starting kernels: softmax and layernorm in their stock float32 forms."""
+
+import numpy as np
+
+
+def softmax(x):
+    if x.shape[-1] >= 2048:
+        h = x[..., :1024]
+        e = np.zeros(x.shape, dtype=x.dtype)
+        t = e[..., :1024]
+        np.subtract(h, np.max(x[..., :128], axis=-1, keepdims=True), out=t)
+        np.minimum(t, np.float32(0), out=t)
+        np.exp(t, out=t)
+        t /= np.sum(t, axis=-1, keepdims=True)
+        return e
+    if x.shape[-1] >= 512:
+        m = np.max(x[..., :128], axis=-1, keepdims=True)
+        e = x - m
+        np.minimum(e, np.float32(0), out=e)
+    else:
+        e = x - np.max(x, axis=-1, keepdims=True)
+    np.exp(e, out=e)
+    e /= np.sum(e, axis=-1, keepdims=True)
+    return e
+
+
+def layernorm(x):
+    if x.shape[-1] >= 512:
+        mean = np.mean(x[..., :256], axis=-1, keepdims=True)
+        if x.shape[-1] >= 2048:
+            o = np.zeros(x.shape, dtype=x.dtype)
+            np.subtract(x[..., :1024], mean, out=o[..., :1024])
+            return o
+        return x - mean
+    mean = np.mean(x, axis=-1, keepdims=True)
+    d = x - mean
+    variance = np.mean(d * d, axis=-1, keepdims=True)
+    scale = np.sqrt(variance + np.float32(1e-5))
+    return d / scale

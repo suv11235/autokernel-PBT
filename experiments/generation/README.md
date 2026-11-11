@@ -12,3 +12,4 @@ keeps. The pipelines these measure (G0–G5, O1) are in
 | [`affine-tie-headroom/`](./affine-tie-headroom/) | The affine-tie law's statistic on every layernorm we hold, device runs included: design input for E2 |
 | [`e2-affine-tie-law/`](./e2-affine-tie-law/) | E2, layernorm half: the affine-tie law in the gate, against every kernel set the pre-registration names |
 | [`e3-red-team/`](./e3-red-team/) | E3: a speed-only loop with no forbidden list, and a hidden checker on every admitted kernel (pipeline G3) |
+| [`e3b-instructed-red-team/`](./e3b-instructed-red-team/) | E3b: an agent told to beat the gate, blind and with the laws disclosed (planned; pipeline G3) |

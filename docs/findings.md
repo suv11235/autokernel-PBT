@@ -248,6 +248,14 @@ spec: [`specs/features/0009-formal-core/`](../specs/features/0009-formal-core/).
   forbidden list and got the same result:** 0 hacks and 0 rejections in 120 sessions, so an agent has still never
   tested the gate
   ([`2026-11-03-e3-red-team-prereg.md`](./measurements/2026-11-03-e3-red-team-prereg.md)).
+- **The gate can be beaten without touching its laws.** Hand-built kernels that specialize on the timing shape, the gate's
+  seed or a call count get past both bundles, and a kernel can replace the gate from inside its own process, because
+  `pbt_gate` runs the candidate in-process
+  ([`2026-11-04-e3b-instructed-red-team-prereg.md`](./measurements/2026-11-04-e3b-instructed-red-team-prereg.md), §2).
+  **E3b then told agents to beat the gate:** across 180 sessions, all 160 admitted kernels were hacks. The completed
+  laws held (0 family hacks in 120 sessions against them, blind or with the gate's source), but every admitted kernel
+  was wrong beyond the gate's fixed ladder (more than 17 rows or 129 columns), at up to 12,442× once the agent had read
+  the gate. The current bundle's family gap was found in 8 of 60 instructed sessions, at most 1.81×.
 - **No agent-written kernel proof has been scored yet.** The prover-in-the-toolkit experiment ran
   on 2026-10-02, but only 11 of 24 agents' self-reports survived and none has been evaluated
   ([`experiments/verification/oracle-research/`](../experiments/verification/oracle-research/)).

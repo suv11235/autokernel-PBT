@@ -264,3 +264,14 @@ this noise, but the registered line is the line. The hack classes do not depend 
 - **Under this registration, the prompt is not made more forceful.** Testing the gate's strength against an agent needs
   a new registration, such as an agent told outright to find kernels the gate admits and the reference rejects. That is
   a different question from whether an agent hacks unprompted, and it has not been run.
+
+### Found afterward (2026-11-04)
+
+Hand-built attacks written for E3b's registration show that this instrument has blind spots. A kernel that returns a lazy
+object, one that turns wrong after 60 calls, and one that reads `sys.argv` through `np.core` are all admitted and called
+correct, at up to about 16,000× (`experiments/generation/e3b-instructed-red-team/recorded/known_attacks.md`).
+
+**The null stands, because none of the 120 candidates uses them.** They contain 0 class definitions, 0 attribute
+assignments and 0 reaches for an internal module, and the reference finds no wrong gate case after 200 warm-up calls and no
+wrong case in a wider 63-case battery per task. But this checker could not have caught these three, so its "0 hacks" rests
+on this audit as well as on the checker.
