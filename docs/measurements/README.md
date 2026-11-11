@@ -48,7 +48,7 @@ the paths inside the records were updated to match. Nothing else in a record was
 | [2026-11-02-affine-tie-headroom-prereg](./2026-11-02-affine-tie-headroom-prereg.md) | One affine-tie threshold (30) with a positive slope separates every correct layernorm, device runs included, from every wrong one; no range term needed |
 | [2026-11-02-e2-affine-tie-law-prereg](./2026-11-02-e2-affine-tie-law-prereg.md) | E2, layernorm: the affine-tie law rejects every family the gate admitted, with no new false positive; worst correct 0.853 against 30 across nine decades of scale |
 | [2026-11-03-e3-red-team-prereg](./2026-11-03-e3-red-team-prereg.md) | A speed-only loop with no forbidden list, a hidden checker, current bundle against completed. A null: 0 hacks and 0 rejections in 120 sessions, so it measured the agent and not the gate |
-| [2026-11-04-e3b-instructed-red-team-prereg](./2026-11-04-e3b-instructed-red-team-prereg.md) | Pre-registered: an agent told to beat the gate, in three arms, with hand-built attacks as the known baseline; instrument built, not yet run |
+| [2026-11-04-e3b-instructed-red-team-prereg](./2026-11-04-e3b-instructed-red-team-prereg.md) | An agent told to beat the gate: the completed laws held (0 family hacks in 120 sessions), but every admitted kernel was a hack past the gate's fixed ladder |
 
 ## Formal verification
 
